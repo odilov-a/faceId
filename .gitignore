@@ -1,0 +1,31 @@
+# Dependency directories
+node_modules/
+
+# Log files
+logs/
+*.log
+
+# Runtime data such as databases
+*.sqlite
+*.db
+*.sql
+
+# OS and editor generated files
+# IDE-specific files
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp
+
+# Build files
+/dist
+
+# Dependency lock files
+package-lock.json
+yarn.lock
+
+.idea/
+*.iml
+
+# Testing directories
+/coverage
