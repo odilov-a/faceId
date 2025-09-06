@@ -14,11 +14,11 @@ class AdminController {
   async login(req, res) {
     try {
       const { username, password } = req.body;
-      const admin = await adminService.login(username, password);
-      if (!admin) {
+      const result = await adminService.login(username, password);
+      if (!result) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
-      return res.json({ data: admin });
+      return res.json({ token: result.token });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }

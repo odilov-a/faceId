@@ -14,7 +14,7 @@ if (!process.env.PORT) {
   process.exit(1);
 }
 
-app.use("/", router);
+app.use("/api", router);
 app.get("/", (req, res) => {
   return res.send({ message: `API is working on port ${process.env.PORT}` });
 });

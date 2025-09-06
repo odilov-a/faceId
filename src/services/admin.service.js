@@ -1,4 +1,5 @@
 const bcrypt = require("bcrypt");
+const { sign } = require("../utils/jwt.js");
 const { Admin } = require("../entities/Admin.js");
 const { AppDataSource } = require("../config/data-source.js");
 
@@ -33,7 +34,13 @@ class AdminService {
       const isMatch = await bcrypt.compare(password, admin.password);
       if (isMatch) {
         const { password: _, ...adminWithoutPassword } = admin;
-        return adminWithoutPassword;
+        const token = sign({
+          id: admin.id,
+          role: admin.role,
+          username: admin.username,
+          createdAt: admin.createdAt,
+        });
+        return { token: token };
       }
       return null;
     } catch (error) {
