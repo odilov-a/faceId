@@ -2,6 +2,11 @@ const { User } = require("../entities/User.js");
 const { AppDataSource } = require("../config/data-source.js");
 const { sign } = require("../utils/jwt.js");
 
+// Configurable threshold & debug flag via environment variables
+// Adjust FACE_MATCH_THRESHOLD in your .env (e.g., 0.75 for more tolerance, 0.5 for stricter)
+const FACE_MATCH_THRESHOLD = parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.6");
+const FACE_DEBUG = process.env.FACE_DEBUG === "1"; // enable detailed matching logs
+
 class UserService {
   constructor() {
     this.userRepository = AppDataSource.getRepository(User);
@@ -82,21 +87,43 @@ class UserService {
 
   async findByEmbedding(faceEmbedding) {
     try {
+      // Basic input validation
+      if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
+        throw new Error("faceEmbedding (non-empty array) is required");
+      }
+
+      if (!faceEmbedding.every((v) => typeof v === "number" && Number.isFinite(v))) {
+        throw new Error("faceEmbedding must be an array of finite numbers");
+      }
+
+      // (Optional) Normalize embedding to unit length for more stable distance (comment out if undesired)
+      const normalizedInput = this.normalize(faceEmbedding);
+
       const users = await this.userRepository.find();
+      if (users.length === 0) {
+        if (FACE_DEBUG) console.warn("[FaceID] No users in database to compare against.");
+        return null;
+      }
+
       let closestUser = null;
       let minDistance = Infinity;
-      const threshold = 0.6;
+      const threshold = FACE_MATCH_THRESHOLD;
+      const inspected = [];
 
       users.forEach((user) => {
         if (!user.faceEmbedding || !Array.isArray(user.faceEmbedding)) return;
 
         // Ensure both arrays have the same length
-        if (user.faceEmbedding.length !== faceEmbedding.length) return;
+        if (user.faceEmbedding.length !== faceEmbedding.length) {
+          if (FACE_DEBUG)
+            inspected.push({ id: user.id, reason: "length-mismatch", storedLen: user.faceEmbedding.length, inputLen: faceEmbedding.length });
+          return;
+        }
 
-        const distance = this.euclideanDistance(
-          user.faceEmbedding,
-          faceEmbedding
-        );
+        // Normalize stored embedding similarly (defensive copy)
+        const storedNorm = this.normalize(user.faceEmbedding);
+        const distance = this.euclideanDistance(storedNorm, normalizedInput);
+        inspected.push({ id: user.id, distance });
 
         // Find the closest match under the threshold
         if (distance < threshold && distance < minDistance) {
@@ -104,6 +131,20 @@ class UserService {
           closestUser = user;
         }
       });
+
+      if (FACE_DEBUG) {
+        // Sort inspected by ascending distance (filter those that have distance)
+        const ranked = inspected
+          .filter((i) => typeof i.distance === "number")
+          .sort((a, b) => a.distance - b.distance)
+          .slice(0, 5);
+        console.log(
+          `[FaceID] Evaluated ${inspected.length} embeddings. Threshold=${threshold}. Top candidates:`,
+          ranked
+        );
+        if (!closestUser) console.log("[FaceID] No candidate under threshold.");
+        else console.log(`[FaceID] Selected user ${closestUser.id} distance=${minDistance}`);
+      }
 
       // If user is found, generate JWT token
       if (closestUser) {
@@ -117,7 +158,10 @@ class UserService {
 
         return {
           user: closestUser,
-          token: token
+          token: token,
+          meta: FACE_DEBUG
+            ? { distance: minDistance, threshold: FACE_MATCH_THRESHOLD }
+            : undefined,
         };
       }
 
@@ -144,6 +188,12 @@ class UserService {
       sum += Math.pow(arr1[i] - arr2[i], 2);
     }
     return Math.sqrt(sum);
+  }
+
+  normalize(arr) {
+    const norm = Math.sqrt(arr.reduce((s, v) => s + v * v, 0));
+    if (!norm || !Number.isFinite(norm)) return arr.slice(); // fallback: return copy
+    return arr.map((v) => v / norm);
   }
 }
 
