@@ -11,8 +11,8 @@ router.get("/", authenticate, requireRole(["admin"]), controller.getAllUsers);
 
 router.post("/register", authenticate, requireRole(["admin"]), validateUserInput, controller.register);
 
-router.get("/:id", authenticate, requireRole(["admin"]), validateUserInput, controller.getUserById);
-router.put("/:id", authenticate, requireRole(["admin"]), validateUserInput, controller.updateUserById);
-router.delete("/:id", authenticate, requireRole(["admin"]), validateUserInput, controller.deleteUserById);
+router.get("/:id", authenticate, requireRole(["admin", "user"]), validateUserInput, controller.getUserById);
+router.put("/:id", authenticate, requireRole(["admin", "user"]), validateUserInput, controller.updateUserById);
+router.delete("/:id", authenticate, requireRole(["admin", "user"]), validateUserInput, controller.deleteUserById);
 
 module.exports = router;
