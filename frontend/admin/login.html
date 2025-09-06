@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - FaceID System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="../assets/css/main.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid vh-100 d-flex align-items-center justify-content-center bg-gradient">
+        <div class="row w-100">
+            <div class="col-md-6 col-lg-4 mx-auto">
+                <div class="card auth-card shadow-lg">
+                    <div class="card-body p-5">
+                        <div class="text-center mb-4">
+                            <div class="auth-icon mb-3">
+                                <i class="fas fa-user-shield fa-3x text-primary"></i>
+                            </div>
+                            <h2 class="card-title">Admin Login</h2>
+                            <p class="text-muted">Enter your credentials to access the admin dashboard</p>
+                        </div>
+
+                        <div id="alertContainer"></div>
+
+                        <form id="adminLoginForm">
+                            <div class="mb-3">
+                                <label for="username" class="form-label">
+                                    <i class="fas fa-user me-2"></i>Username
+                                </label>
+                                <input type="text" class="form-control" id="username" required>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <label for="password" class="form-label">
+                                    <i class="fas fa-lock me-2"></i>Password
+                                </label>
+                                <input type="password" class="form-control" id="password" required>
+                            </div>
+                            
+                            <button type="submit" class="btn btn-primary w-100 mb-3">
+                                <i class="fas fa-sign-in-alt me-2"></i>Login
+                            </button>
+                        </form>
+
+                        <div class="text-center">
+                            <small class="text-muted">
+                                Don't have an account? 
+                                <a href="register.html" class="text-primary">Register here</a>
+                            </small>
+                        </div>
+
+                        <div class="text-center mt-3">
+                            <a href="../index.html" class="btn btn-outline-secondary">
+                                <i class="fas fa-arrow-left me-2"></i>Back to Home
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="../assets/js/api.js"></script>
+    <script>
+        document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            Utils.showLoading('Logging in...');
+            
+            try {
+                const response = await api.adminLogin(username, password);
+                
+                // Store token and user info
+                api.setAuthToken(response.token);
+                localStorage.setItem('userInfo', JSON.stringify(response.data));
+                localStorage.setItem('userRole', 'admin');
+                
+                Utils.hideLoading();
+                Utils.showAlert('Login successful! Redirecting...', 'success');
+                
+                setTimeout(() => {
+                    window.location.href = 'dashboard.html';
+                }, 1500);
+                
+            } catch (error) {
+                Utils.hideLoading();
+                Utils.showAlert(error.message || 'Login failed', 'danger');
+            }
+        });
+    </script>
+</body>
+</html>
