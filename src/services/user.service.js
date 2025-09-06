@@ -6,6 +6,7 @@ const { sign } = require("../utils/jwt.js");
 // Adjust FACE_MATCH_THRESHOLD in your .env (e.g., 0.75 for more tolerance, 0.5 for stricter)
 const FACE_MATCH_THRESHOLD = parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.6");
 const FACE_DEBUG = process.env.FACE_DEBUG === "1"; // enable detailed matching logs
+const FACE_DISTANCE_MARGIN = parseFloat(process.env.FACE_DISTANCE_MARGIN || "0.05"); // min gap between best and second best
 
 class UserService {
   constructor() {
@@ -14,10 +15,12 @@ class UserService {
 
   async createUser(firstName, lastName, faceEmbedding) {
     try {
+      // Normalize embedding before saving for consistency
+      let processedEmbedding = Array.isArray(faceEmbedding) ? this.normalize(faceEmbedding) : faceEmbedding;
       const newUser = this.userRepository.create({
         firstName,
         lastName,
-        faceEmbedding,
+        faceEmbedding: processedEmbedding,
       });
       return await this.userRepository.save(newUser);
     } catch (error) {
@@ -105,8 +108,9 @@ class UserService {
         return null;
       }
 
-      let closestUser = null;
-      let minDistance = Infinity;
+  let closestUser = null;
+  let minDistance = Infinity;
+  let secondDistance = Infinity;
       const threshold = FACE_MATCH_THRESHOLD;
       const inspected = [];
 
@@ -126,9 +130,12 @@ class UserService {
         inspected.push({ id: user.id, distance });
 
         // Find the closest match under the threshold
-        if (distance < threshold && distance < minDistance) {
+        if (distance < minDistance) {
+          secondDistance = minDistance;
           minDistance = distance;
           closestUser = user;
+        } else if (distance < secondDistance) {
+          secondDistance = distance;
         }
       });
 
@@ -147,7 +154,9 @@ class UserService {
       }
 
       // If user is found, generate JWT token
-      if (closestUser) {
+  // Apply threshold AND margin criterion
+  const marginOk = secondDistance - minDistance >= FACE_DISTANCE_MARGIN || secondDistance === Infinity;
+  if (closestUser && minDistance < threshold && marginOk) {
         const token = sign({
           id: closestUser.id,
           role: "user",
@@ -160,7 +169,7 @@ class UserService {
           user: closestUser,
           token: token,
           meta: FACE_DEBUG
-            ? { distance: minDistance, threshold: FACE_MATCH_THRESHOLD }
+    ? { distance: minDistance, secondDistance, margin: secondDistance - minDistance, threshold: FACE_MATCH_THRESHOLD, marginRequired: FACE_DISTANCE_MARGIN }
             : undefined,
         };
       }

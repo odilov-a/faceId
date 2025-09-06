@@ -173,17 +173,31 @@ const FaceUtils = {
     },
 
     // Capture and process face
-    async captureFace(faceCapture) {
+    async captureFace(faceCapture, frames = 3, delayMs = 120) {
         try {
-            const imageData = faceCapture.captureImage();
-            const isValidFace = await faceCapture.validateFace(imageData);
-            
-            if (!isValidFace) {
-                throw new Error('No face detected in the image. Please position your face clearly in the camera.');
+            const embeddings = [];
+            let lastImage = null;
+            for (let i = 0; i < frames; i++) {
+                const imageData = faceCapture.captureImage();
+                const isValidFace = await faceCapture.validateFace(imageData);
+                if (!isValidFace) {
+                    throw new Error('No face detected in the image. Please position your face clearly in the camera.');
+                }
+                const emb = await faceCapture.generateFaceEmbedding(imageData);
+                embeddings.push(emb);
+                lastImage = imageData;
+                if (i < frames - 1) {
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
             }
-            
-            const embedding = await faceCapture.generateFaceEmbedding(imageData);
-            return { imageData, embedding };
+            // Average embeddings element-wise
+            const length = embeddings[0].length;
+            const avg = new Array(length).fill(0);
+            embeddings.forEach(e => {
+                for (let i = 0; i < length; i++) avg[i] += e[i];
+            });
+            for (let i = 0; i < length; i++) avg[i] /= embeddings.length;
+            return { imageData: lastImage, embedding: avg };
         } catch (error) {
             throw new Error(`Face capture failed: ${error.message}`);
         }
