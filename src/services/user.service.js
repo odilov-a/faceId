@@ -1,5 +1,6 @@
 const { User } = require("../entities/User.js");
 const { AppDataSource } = require("../config/data-source.js");
+const { sign } = require("../utils/jwt.js");
 
 class UserService {
   constructor() {
@@ -104,7 +105,23 @@ class UserService {
         }
       });
 
-      return closestUser;
+      // If user is found, generate JWT token
+      if (closestUser) {
+        const token = sign({
+          id: closestUser.id,
+          role: "user",
+          firstName: closestUser.firstName,
+          lastName: closestUser.lastName,
+          createdAt: closestUser.createdAt,
+        });
+
+        return {
+          user: closestUser,
+          token: token
+        };
+      }
+
+      return null;
     } catch (error) {
       throw new Error(`Error finding user by embedding: ${error.message}`);
     }

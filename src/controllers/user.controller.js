@@ -18,11 +18,14 @@ class UserController {
   async login(req, res) {
     try {
       const { faceEmbedding } = req.body;
-      const user = await userService.findByEmbedding(faceEmbedding);
-      if (!user) {
+      const result = await userService.findByEmbedding(faceEmbedding);
+      if (!result) {
         return res.status(401).json({ message: "FaceID not recognized" });
       }
-      return res.json({ data: user });
+      return res.json({
+        data: result.user,
+        token: result.token,
+      });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
