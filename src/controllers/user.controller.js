@@ -56,12 +56,10 @@ class UserController {
         return res.status(404).json({ message: "User not found!" });
       }
       const { firstName, lastName, faceEmbedding } = req.body;
-
       const updateData = {};
       if (firstName) updateData.firstName = firstName.trim();
       if (lastName) updateData.lastName = lastName.trim();
       if (faceEmbedding) updateData.faceEmbedding = faceEmbedding;
-
       const updatedUser = await userService.updateUserById(
         req.params.id,
         updateData

@@ -1,32 +1,27 @@
 const { EntitySchema } = require("typeorm");
 
-const User = new EntitySchema({
-  name: "User",
-  tableName: "users",
+const Admin = new EntitySchema({
+  name: "Admin",
+  tableName: "admins",
   columns: {
     id: {
       type: "uuid",
       primary: true,
       generated: "uuid",
     },
-    firstName: {
+    username: {
       type: "varchar",
       nullable: false,
       length: 100,
     },
-    lastName: {
+    password: {
       type: "varchar",
       nullable: false,
       length: 100,
-    },
-    faceEmbedding: {
-      type: "float8",
-      array: true,
-      nullable: true,
     },
     role: {
       type: "varchar",
-      default: "user",
+      default: "admin",
       nullable: false,
     },
     createdAt: {
@@ -37,4 +32,4 @@ const User = new EntitySchema({
   },
 });
 
-module.exports = { User };
+module.exports = { Admin };

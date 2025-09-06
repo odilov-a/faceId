@@ -2,6 +2,7 @@ require("dotenv").config();
 require("reflect-metadata");
 const { DataSource } = require("typeorm");
 const { User } = require("../entities/User.js");
+const { Admin } = require("../entities/Admin.js");
 
 if (
   !process.env.DB_PORT ||
@@ -21,7 +22,7 @@ const AppDataSource = new DataSource({
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
   synchronize: true,
-  entities: [User],
+  entities: [User, Admin],
 });
 
 module.exports = { AppDataSource };
