@@ -10,6 +10,9 @@ router.get("/", authenticate, requireRole(["admin"]), controller.getAllUsers);
 
 router.post("/register", authenticate, requireRole(["admin"]), controller.register);
 
+// Current user profile
+router.get("/me", authenticate, requireRole(["user","admin"]), controller.getMe);
+
 router.get("/:id", authenticate, requireRole(["admin", "user"]), controller.getUserById);
 router.put("/:id", authenticate, requireRole(["admin", "user"]), controller.updateUserById);
 router.delete("/:id", authenticate, requireRole(["admin", "user"]), controller.deleteUserById);

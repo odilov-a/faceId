@@ -93,6 +93,11 @@ class ApiService {
         return await this.apiCall(`/users/${id}`);
     }
 
+    // Get current authenticated user (profile)
+    async getCurrentUser() {
+        return await this.apiCall('/users/me');
+    }
+
     async updateUser(id, userData) {
         return await this.apiCall(`/users/${id}`, {
             method: 'PUT',

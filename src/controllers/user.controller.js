@@ -22,10 +22,9 @@ class UserController {
       if (!result) {
         return res.status(401).json({ message: "FaceID not recognized" });
       }
-      return res.json({
-        data: result.user,
-        token: result.token,
-      });
+  // Remove sensitive embedding from response
+  const { faceEmbedding: _removed, ...safeUser } = result.user;
+  return res.json({ data: safeUser, token: result.token });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }
@@ -80,6 +79,24 @@ class UserController {
         return res.status(404).json({ message: "User not found!" });
       }
       return res.json({ message: "User deleted successfully!" });
+    } catch (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  }
+
+  // Return currently authenticated user's data
+  async getMe(req, res) {
+    try {
+      const userId = req.userId; // set in auth middleware
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const user = await userService.getUserById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+  const { faceEmbedding: _removed, ...safeUser } = user;
+  return res.json({ data: safeUser });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }

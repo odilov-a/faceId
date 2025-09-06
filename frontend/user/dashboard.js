@@ -13,8 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
     
-    // Load user data
-    loadUserData();
+    // Load user data (refresh from backend to ensure accuracy)
+    refreshUserFromServer();
     updateDateTime();
     setInterval(updateDateTime, 60000); // Update every minute
 });
@@ -41,6 +41,21 @@ function loadUserData() {
         
         // Update last login
         document.getElementById('lastLogin').textContent = 'Just now';
+    }
+}
+
+// Refresh current user from backend /users/me
+async function refreshUserFromServer() {
+    try {
+        const response = await api.getCurrentUser();
+        if (response && response.data) {
+            localStorage.setItem('userInfo', JSON.stringify(response.data));
+            loadUserData();
+        }
+    } catch (err) {
+        console.error('Failed to refresh user profile', err);
+        // Fallback to existing local storage
+        loadUserData();
     }
 }
 
