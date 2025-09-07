@@ -1,7 +1,7 @@
 // Admin Dashboard JavaScript
 let currentUsers = [];
 let faceCapture = null;
-let capturedFaceEmbedding = null;
+let capturedFaceEmbeddings = null; // array of embeddings (multi-frame)
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
@@ -138,9 +138,8 @@ async function captureFace() {
     
     try {
         Utils.showLoading('Processing face capture...');
-        const result = await FaceUtils.captureFace(faceCapture);
-        
-        capturedFaceEmbedding = result.embedding;
+    const result = await FaceUtils.captureFace(faceCapture, 5, 120, { debug: false });
+    capturedFaceEmbeddings = result.embeddings; // store entire set
         
         // Show preview
         const preview = document.getElementById('capturePreview');
@@ -185,7 +184,7 @@ document.getElementById('addUserForm').addEventListener('submit', async (e) => {
     const firstName = document.getElementById('firstName').value;
     const lastName = document.getElementById('lastName').value;
     
-    if (!capturedFaceEmbedding) {
+    if (!capturedFaceEmbeddings || !capturedFaceEmbeddings.length) {
         Utils.showAlert('Please capture a face first', 'warning');
         return;
     }
@@ -193,14 +192,14 @@ document.getElementById('addUserForm').addEventListener('submit', async (e) => {
     Utils.showLoading('Adding user...');
     
     try {
-        await api.userRegister(firstName, lastName, capturedFaceEmbedding);
+    await api.userRegister(firstName, lastName, capturedFaceEmbeddings);
         
         Utils.hideLoading();
         Utils.showAlert('User added successfully!', 'success');
         
         // Reset form
         document.getElementById('addUserForm').reset();
-        capturedFaceEmbedding = null;
+    capturedFaceEmbeddings = null;
         document.getElementById('submitBtn').disabled = true;
         document.getElementById('capturePreview').innerHTML = `
             <i class="fas fa-image fa-3x text-muted mb-3"></i>

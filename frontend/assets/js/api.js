@@ -70,17 +70,23 @@ class ApiService {
     }
 
     // User Authentication
-    async userLogin(faceEmbedding) {
+    async userLogin(faceEmbeddingOrEmbeddings) {
+        const payload = Array.isArray(faceEmbeddingOrEmbeddings[0])
+            ? { faceEmbeddings: faceEmbeddingOrEmbeddings }
+            : { faceEmbedding: faceEmbeddingOrEmbeddings };
         return await this.apiCall('/users/login', {
             method: 'POST',
-            body: JSON.stringify({ faceEmbedding })
+            body: JSON.stringify(payload)
         });
     }
 
-    async userRegister(firstName, lastName, faceEmbedding) {
+    async userRegister(firstName, lastName, faceEmbeddingOrEmbeddings) {
+        const payload = Array.isArray(faceEmbeddingOrEmbeddings[0])
+            ? { firstName, lastName, faceEmbeddings: faceEmbeddingOrEmbeddings }
+            : { firstName, lastName, faceEmbedding: faceEmbeddingOrEmbeddings };
         return await this.apiCall('/users/register', {
             method: 'POST',
-            body: JSON.stringify({ firstName, lastName, faceEmbedding })
+            body: JSON.stringify(payload)
         });
     }
 

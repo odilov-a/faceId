@@ -24,6 +24,19 @@ const User = new EntitySchema({
       array: true,
       nullable: true,
     },
+    // Stores multiple raw/normalized face embeddings (array of arrays) in JSON for improved matching
+    faceEmbeddings: {
+      type: "jsonb",
+      nullable: true,
+    },
+    embeddingVersion: {
+      type: "int",
+      default: 1,
+    },
+    lastEmbeddingUpdate: {
+      type: "timestamp",
+      nullable: true,
+    },
     role: {
       type: "varchar",
       default: "user",

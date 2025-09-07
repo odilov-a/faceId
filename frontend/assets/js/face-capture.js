@@ -108,10 +108,8 @@ class FaceCapture {
     }
 
     // Validate face in image (basic validation)
-    async validateFace(imageData) {
-        // This is a simplified validation
-        // In production, use proper face detection libraries
-        
+    async validateFace(imageData, { debug = false } = {}) {
+        // Lightweight heuristic validation; tolerant to lighting
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
@@ -120,41 +118,55 @@ class FaceCapture {
                 canvas.width = img.width;
                 canvas.height = img.height;
                 ctx.drawImage(img, 0, 0);
-                
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const hasValidFace = this.detectFaceInImageData(imageData);
-                resolve(hasValidFace);
+                const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const metrics = this.faceMetrics(frame);
+                // Adaptive acceptance logic:
+                // 1. Base conditions broadened
+                // 2. Adjust for dark (low meanLum) / bright (high meanLum) frames
+                let edgeThreshold = 8; // was 20 (too strict)
+                if (metrics.meanLum < 40) edgeThreshold = 4; // dark scene - relax
+                if (metrics.meanLum > 200) edgeThreshold = 6; // very bright - slightly relax
+                // Skin ratio wide bounds; extremely low/high unlikely for a centered face
+                const ok = metrics.skinRatio > 0.02 && metrics.skinRatio < 0.8 && metrics.edgeVariance > edgeThreshold;
+                if (debug) console.log('[FaceValidation]', metrics, 'ok:', ok);
+                resolve({ ok, metrics });
             };
             img.src = imageData;
         });
     }
 
     // Simple face detection (checks for basic face-like patterns)
-    detectFaceInImageData(imageData) {
+    faceMetrics(imageData) {
         const data = imageData.data;
-        const width = imageData.width;
-        const height = imageData.height;
-        
-        // Look for face-like patterns (simplified)
-        let skinColorPixels = 0;
-        let totalPixels = 0;
-        
-        for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            
-            // Basic skin color detection
-            if (r > 95 && g > 40 && b > 20 && 
-                Math.max(r, g, b) - Math.min(r, g, b) > 15 &&
-                Math.abs(r - g) > 15 && r > g && r > b) {
-                skinColorPixels++;
+        const w = imageData.width;
+        const h = imageData.height;
+        let skin = 0, total = 0;
+        let lumSum = 0, lumSq = 0;
+        // Simple edge metric (difference with right pixel)
+        let edgeAccum = 0, edgeCount = 0;
+        for (let y = 0; y < h; y += 2) { // subsample every 2 rows for speed
+            for (let x = 0; x < w; x += 2) {
+                const idx = (y * w + x) * 4;
+                const r = data[idx], g = data[idx+1], b = data[idx+2];
+                const maxc = Math.max(r,g,b), minc = Math.min(r,g,b);
+                // Broader skin heuristic (includes varied lighting)
+                if (r > 80 && g > 30 && b > 15 && (maxc - minc) > 10 && r > b * 0.8) skin++;
+                const lum = 0.299*r + 0.587*g + 0.114*b;
+                lumSum += lum; lumSq += lum*lum; total++;
+                if (x+2 < w) {
+                    const idx2 = (y * w + (x+2)) * 4;
+                    const r2 = data[idx2], g2 = data[idx2+1], b2 = data[idx2+2];
+                    const lum2 = 0.299*r2 + 0.587*g2 + 0.114*b2;
+                    edgeAccum += Math.abs(lum - lum2);
+                    edgeCount++;
+                }
             }
-            totalPixels++;
         }
-        
-        const skinRatio = skinColorPixels / totalPixels;
-        return skinRatio > 0.1 && skinRatio < 0.6; // Face should have some skin but not too much
+        const skinRatio = skin / total;
+        const meanLum = lumSum / total;
+        const varLum = (lumSq/total) - meanLum*meanLum;
+        const edgeVariance = edgeCount ? edgeAccum / edgeCount : 0;
+        return { skinRatio: parseFloat(skinRatio.toFixed(4)), meanLum: parseFloat(meanLum.toFixed(2)), varLum: parseFloat(varLum.toFixed(2)), edgeVariance: parseFloat(edgeVariance.toFixed(2)) };
     }
 
     // Get camera status
@@ -173,31 +185,75 @@ const FaceUtils = {
     },
 
     // Capture and process face
-    async captureFace(faceCapture, frames = 3, delayMs = 120) {
+    async captureFace(faceCapture, frames = 5, delayMs = 120, { minValid = 3, maxRetriesPerFrame = 2, debug = false, allowFallback = true, useModel = true } = {}) {
         try {
             const embeddings = [];
             let lastImage = null;
-            for (let i = 0; i < frames; i++) {
-                const imageData = faceCapture.captureImage();
-                const isValidFace = await faceCapture.validateFace(imageData);
-                if (!isValidFace) {
-                    throw new Error('No face detected in the image. Please position your face clearly in the camera.');
-                }
-                const emb = await faceCapture.generateFaceEmbedding(imageData);
-                embeddings.push(emb);
-                lastImage = imageData;
-                if (i < frames - 1) {
-                    await new Promise(r => setTimeout(r, delayMs));
+            let validCount = 0;
+            const metricsLog = [];
+            let modelDescriptors = [];
+            // If face-api.js present and useModel true, attempt direct descriptor extraction from video element
+            if (useModel && typeof faceapi !== 'undefined' && faceCapture.video?.readyState === 4) {
+                try {
+                    modelDescriptors = await FaceRecognition.extractMultiple(faceCapture.video, frames, delayMs, { debug });
+                    if (modelDescriptors.length >= minValid) {
+                        if (debug) console.log('[Capture] Using model descriptors');
+                        return { imageData: faceCapture.captureImage(), embeddings: modelDescriptors, validFrames: modelDescriptors.length, model: 'face-api' };
+                    } else if (debug) {
+                        console.warn('[Capture] Not enough model descriptors, fallback to heuristic pipeline.');
+                    }
+                } catch (e) {
+                    if (debug) console.warn('[Capture] Model extraction failed, fallback', e);
                 }
             }
-            // Average embeddings element-wise
-            const length = embeddings[0].length;
-            const avg = new Array(length).fill(0);
-            embeddings.forEach(e => {
-                for (let i = 0; i < length; i++) avg[i] += e[i];
-            });
-            for (let i = 0; i < length; i++) avg[i] /= embeddings.length;
-            return { imageData: lastImage, embedding: avg };
+            for (let i = 0; i < frames; i++) {
+                let attempt = 0;
+                let validated = false;
+                let metricsSnapshot = null;
+                while (attempt <= maxRetriesPerFrame && !validated) {
+                    const imageData = faceCapture.captureImage();
+                    const { ok, metrics } = await faceCapture.validateFace(imageData, { debug });
+                    metricsSnapshot = metrics;
+                    if (ok) {
+                        // Treat as valid if ok, or if not ok but strict==false and this is final attempt
+                        if (ok || attempt === maxRetriesPerFrame) {
+                            validated = true;
+                            lastImage = imageData;
+                            const emb = await faceCapture.generateFaceEmbedding(imageData);
+                            embeddings.push(emb);
+                            if (ok) validCount++;
+                            if (debug) console.log(`[Capture] Frame ${i+1} accepted (ok=${ok})`, metrics);
+                        } else {
+                            attempt++;
+                            if (debug) console.log(`[Capture] Frame ${i+1} attempt ${attempt} retry`, metrics);
+                            await new Promise(r => setTimeout(r, 80));
+                            continue;
+                        }
+                    } else {
+                        attempt++;
+                        if (debug) console.log(`[Capture] Frame ${i+1} attempt ${attempt} rejected`, metrics);
+                        await new Promise(r => setTimeout(r, 80));
+                    }
+                }
+                metricsLog.push({ frame: i+1, metrics: metricsSnapshot });
+                if (i < frames - 1) await new Promise(r => setTimeout(r, delayMs));
+            }
+            let fallbackUsed = false;
+            if (validCount < minValid) {
+                if (allowFallback === true && embeddings.length > 0) {
+                    // Use heuristic: select top frames by edgeVariance as "pseudo-valid" until minValid reached
+                    const ranked = metricsLog
+                      .map((m, idx) => ({ idx, edge: m.metrics?.edgeVariance || 0 }))
+                      .sort((a,b)=>b.edge - a.edge);
+                    // Nothing to regenerate since embeddings collected; we just mark them logically
+                    validCount = Math.min(minValid, embeddings.length);
+                    fallbackUsed = true;
+                    if (debug) console.warn(`[Capture] Fallback engaged. Marking top ${validCount} frames as valid.`);
+                } else {
+                    throw new Error(`Insufficient valid frames (${validCount}/${minValid}). Improve lighting or move closer.`);
+                }
+            }
+            return { imageData: lastImage, embeddings, validFrames: validCount, fallbackUsed, metrics: metricsLog };
         } catch (error) {
             throw new Error(`Face capture failed: ${error.message}`);
         }

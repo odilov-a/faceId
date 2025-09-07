@@ -152,10 +152,10 @@
 
             try {
                 // Capture face
-                const result = await FaceUtils.captureFace(faceCapture);
+                const result = await FaceUtils.captureFace(faceCapture, 5, 120, { debug: false });
                 
-                // Authenticate with backend
-                const response = await api.userLogin(result.embedding);
+                // Authenticate with backend using multi-embedding array
+                const response = await api.userLogin(result.embeddings);
                 
                 // Store authentication data
                 api.setAuthToken(response.token);

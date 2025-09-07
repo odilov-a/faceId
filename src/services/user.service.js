@@ -1,6 +1,7 @@
 const { User } = require("../entities/User.js");
 const { AppDataSource } = require("../config/data-source.js");
 const { sign } = require("../utils/jwt.js");
+const faceIndex = require('./face-index.js');
 
 // Configurable threshold & debug flag via environment variables
 // Adjust FACE_MATCH_THRESHOLD in your .env (e.g., 0.75 for more tolerance, 0.5 for stricter)
@@ -13,16 +14,44 @@ class UserService {
     this.userRepository = AppDataSource.getRepository(User);
   }
 
-  async createUser(firstName, lastName, faceEmbedding) {
+  async createUser(firstName, lastName, faceEmbeddingOrEmbeddings) {
     try {
-      // Normalize embedding before saving for consistency
-      let processedEmbedding = Array.isArray(faceEmbedding) ? this.normalize(faceEmbedding) : faceEmbedding;
+      if (!firstName || !lastName) throw new Error("firstName & lastName required");
+      if (!faceEmbeddingOrEmbeddings) throw new Error("face embeddings required");
+
+      // Accept single embedding (array) or array of embeddings (array of array)
+      let embeddings = [];
+      if (Array.isArray(faceEmbeddingOrEmbeddings[0])) {
+        embeddings = faceEmbeddingOrEmbeddings;
+      } else {
+        embeddings = [faceEmbeddingOrEmbeddings];
+      }
+      // Validate and normalize each embedding (length consistency enforced later)
+      embeddings = embeddings
+        .filter(e => Array.isArray(e) && e.every(v => typeof v === 'number' && Number.isFinite(v)))
+        .map(e => this.normalize(e));
+      if (embeddings.length === 0) throw new Error("No valid embeddings supplied");
+
+      // Ensure uniform length
+      const len = embeddings[0].length;
+      if (!embeddings.every(e => e.length === len)) throw new Error("Embeddings length mismatch");
+
+      const representative = this.aggregateEmbeddings(embeddings);
       const newUser = this.userRepository.create({
         firstName,
         lastName,
-        faceEmbedding: processedEmbedding,
+        faceEmbedding: representative.mean, // backward compatibility (single embedding)
+        faceEmbeddings: {
+          samples: embeddings,
+          mean: representative.mean,
+          median: representative.median
+        },
+        embeddingVersion: 2,
+        lastEmbeddingUpdate: new Date()
       });
-      return await this.userRepository.save(newUser);
+  const saved = await this.userRepository.save(newUser);
+  try { faceIndex.addUser(saved); } catch(e) { if (FACE_DEBUG) console.warn('[FaceID] addUser to index failed', e.message); }
+  return saved;
     } catch (error) {
       throw new Error(`Error creating user: ${error.message}`);
     }
@@ -88,21 +117,23 @@ class UserService {
     }
   }
 
-  async findByEmbedding(faceEmbedding) {
+  async findByEmbedding(faceEmbeddingOrEmbeddings, options = {}) {
     try {
-      // Basic input validation
-      if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
-        throw new Error("faceEmbedding (non-empty array) is required");
+      // Accept single embedding or array of embeddings (capture burst for stability)
+      let embeddings = [];
+      if (Array.isArray(faceEmbeddingOrEmbeddings[0])) {
+        embeddings = faceEmbeddingOrEmbeddings;
+      } else {
+        embeddings = [faceEmbeddingOrEmbeddings];
       }
+      embeddings = embeddings
+        .filter(e => Array.isArray(e) && e.every(v => typeof v === 'number' && Number.isFinite(v)))
+        .map(e => this.normalize(e));
+      if (embeddings.length === 0) throw new Error("faceEmbedding(s) required");
+      const inputAggregate = this.aggregateEmbeddings(embeddings);
+      const normalizedInput = inputAggregate.mean; // use mean aggregate
 
-      if (!faceEmbedding.every((v) => typeof v === "number" && Number.isFinite(v))) {
-        throw new Error("faceEmbedding must be an array of finite numbers");
-      }
-
-      // (Optional) Normalize embedding to unit length for more stable distance (comment out if undesired)
-      const normalizedInput = this.normalize(faceEmbedding);
-
-      const users = await this.userRepository.find();
+  const users = await this.userRepository.find();
       if (users.length === 0) {
         if (FACE_DEBUG) console.warn("[FaceID] No users in database to compare against.");
         return null;
@@ -114,30 +145,43 @@ class UserService {
       const threshold = FACE_MATCH_THRESHOLD;
       const inspected = [];
 
-      users.forEach((user) => {
-        if (!user.faceEmbedding || !Array.isArray(user.faceEmbedding)) return;
-
-        // Ensure both arrays have the same length
-        if (user.faceEmbedding.length !== faceEmbedding.length) {
-          if (FACE_DEBUG)
-            inspected.push({ id: user.id, reason: "length-mismatch", storedLen: user.faceEmbedding.length, inputLen: faceEmbedding.length });
-          return;
+      // Ensure index loaded (lazy rebuild if empty)
+      if (!faceIndex.loaded) {
+        try { await faceIndex.rebuild(); } catch(e) { if (FACE_DEBUG) console.warn('[FaceID] index rebuild failed', e.message); }
+      }
+      // Search via cosine distance index if available and dimensions align
+      if (faceIndex.loaded) {
+        const hit = faceIndex.search(normalizedInput, { threshold: FACE_MATCH_THRESHOLD, margin: FACE_DISTANCE_MARGIN });
+        if (hit) {
+          closestUser = users.find(u=>u.id===hit.id);
+          minDistance = hit.distance;
+          secondDistance = hit.secondDistance || Infinity;
+          inspected.push({ id: hit.id, distance: hit.distance, via: 'index' });
         }
-
-        // Normalize stored embedding similarly (defensive copy)
-        const storedNorm = this.normalize(user.faceEmbedding);
-        const distance = this.euclideanDistance(storedNorm, normalizedInput);
-        inspected.push({ id: user.id, distance });
-
-        // Find the closest match under the threshold
-        if (distance < minDistance) {
-          secondDistance = minDistance;
-          minDistance = distance;
-          closestUser = user;
-        } else if (distance < secondDistance) {
-          secondDistance = distance;
-        }
-      });
+      }
+      // Fallback direct linear scan if no index hit
+      if (!closestUser) {
+        users.forEach((user) => {
+          let candidateVectors = [];
+          if (user.faceEmbeddings && user.faceEmbeddings.samples) {
+            candidateVectors = [user.faceEmbeddings.mean, user.faceEmbeddings.median, ...user.faceEmbeddings.samples.slice(0, 3)];
+          } else if (user.faceEmbedding) {
+            candidateVectors = [user.faceEmbedding];
+          }
+          candidateVectors = candidateVectors.filter(v => Array.isArray(v) && v.length === normalizedInput.length);
+          if (candidateVectors.length === 0) return;
+          const distances = candidateVectors.map(v => this.euclideanDistance(this.normalize(v), normalizedInput));
+          const distance = Math.min(...distances);
+          inspected.push({ id: user.id, distance, variants: distances.length });
+          if (distance < minDistance) {
+            secondDistance = minDistance;
+            minDistance = distance;
+            closestUser = user;
+          } else if (distance < secondDistance) {
+            secondDistance = distance;
+          }
+        });
+      }
 
       if (FACE_DEBUG) {
         // Sort inspected by ascending distance (filter those that have distance)
@@ -203,6 +247,24 @@ class UserService {
     const norm = Math.sqrt(arr.reduce((s, v) => s + v * v, 0));
     if (!norm || !Number.isFinite(norm)) return arr.slice(); // fallback: return copy
     return arr.map((v) => v / norm);
+  }
+
+  aggregateEmbeddings(embeddings) {
+    if (!embeddings || embeddings.length === 0) throw new Error("No embeddings to aggregate");
+    const len = embeddings[0].length;
+    const mean = new Array(len).fill(0);
+    embeddings.forEach(e => {
+      for (let i = 0; i < len; i++) mean[i] += e[i];
+    });
+    for (let i = 0; i < len; i++) mean[i] /= embeddings.length;
+    // median per dimension
+    const median = [];
+    for (let i = 0; i < len; i++) {
+      const col = embeddings.map(e => e[i]).sort((a,b)=>a-b);
+      const mid = Math.floor(col.length/2);
+      median.push(col.length % 2 === 0 ? (col[mid-1]+col[mid])/2 : col[mid]);
+    }
+    return { mean, median };
   }
 }
 

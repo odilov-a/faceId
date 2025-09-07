@@ -3,11 +3,12 @@ const userService = require("../services/user.service.js");
 class UserController {
   async register(req, res) {
     try {
-      const { firstName, lastName, faceEmbedding } = req.body;
+      const { firstName, lastName, faceEmbedding, faceEmbeddings } = req.body;
+      const embeddingsInput = faceEmbeddings || faceEmbedding;
       const user = await userService.createUser(
         firstName.trim(),
         lastName.trim(),
-        faceEmbedding
+        embeddingsInput
       );
       return res.status(201).json({ data: user });
     } catch (error) {
@@ -17,8 +18,8 @@ class UserController {
 
   async login(req, res) {
     try {
-      const { faceEmbedding } = req.body;
-      const result = await userService.findByEmbedding(faceEmbedding);
+  const { faceEmbedding, faceEmbeddings } = req.body;
+  const result = await userService.findByEmbedding(faceEmbeddings || faceEmbedding);
       if (!result) {
         return res.status(401).json({ message: "FaceID not recognized" });
       }
