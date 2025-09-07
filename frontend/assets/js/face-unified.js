@@ -1,6 +1,6 @@
 // Unified Face ID Frontend Utilities
 // Combines face capture, recognition, and validation in one module
-// Uses centralized configuration and utilities
+// Uses centralized configuration and enhanced backend integration
 
 // Import the shared face utilities if available
 if (typeof require !== 'undefined') {
@@ -27,8 +27,107 @@ const FrontendFaceConfig = window.FaceConfig || {
     DEBUG_ENABLED: false,
     EMBEDDING_DIMENSION: 128,
     MODEL_INPUT_SIZE: 224,
-    FACE_DETECTION_SCORE_THRESHOLD: 0.4
+    FACE_DETECTION_SCORE_THRESHOLD: 0.4,
+    // Enhanced configuration for advanced face detection
+    USE_ENHANCED_ENDPOINTS: true,
+    MAX_UPLOAD_SIZE: 5 * 1024 * 1024, // 5MB
+    SUPPORTED_IMAGE_TYPES: ['image/jpeg', 'image/png', 'image/webp'],
+    REGISTRATION_IMAGES: 3, // Recommended number of images for registration
+    IMAGE_QUALITY: 0.85 // JPEG quality for uploads
 };
+
+/**
+ * Enhanced Face API Client
+ * Handles communication with advanced backend endpoints
+ */
+const FaceAPIClient = (() => {
+    const baseURL = '/api/users';
+
+    /**
+     * Register user with face images (enhanced endpoint)
+     * @param {string} firstName - First name
+     * @param {string} lastName - Last name
+     * @param {File[]|Blob[]} imageFiles - Face image files
+     * @returns {Promise<Object>} Registration result
+     */
+    async function registerWithImages(firstName, lastName, imageFiles) {
+        try {
+            if (!imageFiles || imageFiles.length === 0) {
+                throw new Error('At least one face image is required');
+            }
+
+            const formData = new FormData();
+            formData.append('firstName', firstName);
+            formData.append('lastName', lastName);
+
+            // Add image files
+            imageFiles.forEach((file, index) => {
+                formData.append('faceImages', file, `face_${index}.jpg`);
+            });
+
+            const response = await fetch(`${baseURL}/register/image`, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                }
+            });
+
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || `Registration failed: ${response.status}`);
+            }
+
+            return result;
+        } catch (error) {
+            console.error('Enhanced registration error:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Login user with face image (enhanced endpoint)
+     * @param {File|Blob} imageFile - Face image file
+     * @returns {Promise<Object>} Login result
+     */
+    async function loginWithImage(imageFile) {
+        try {
+            if (!imageFile) {
+                throw new Error('Face image is required for login');
+            }
+
+            const formData = new FormData();
+            formData.append('faceImage', imageFile, 'face.jpg');
+
+            const response = await fetch(`${baseURL}/login/image`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(result.error || result.message || `Login failed: ${response.status}`);
+            }
+
+            // Store token if login successful
+            if (result.success && result.token) {
+                localStorage.setItem('token', result.token);
+            }
+
+            return result;
+        } catch (error) {
+            console.error('Enhanced login error:', error);
+            throw error;
+        }
+    }
+
+    return {
+        registerWithImages,
+        loginWithImage
+    };
+})();
 
 /**
  * Face Recognition Helper using face-api.js

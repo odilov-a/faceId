@@ -3,6 +3,56 @@ const { FaceUtils } = require("../utils/face-utils.js");
 
 class UserController {
   /**
+   * Register a new user with face images (enhanced)
+   */
+  async registerWithImages(req, res) {
+    try {
+      const { firstName, lastName } = req.body;
+      
+      // Validate required fields
+      if (!firstName?.trim() || !lastName?.trim()) {
+        return res.status(400).json({ 
+          success: false,
+          error: "First name and last name are required" 
+        });
+      }
+
+      // Check for uploaded files
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ 
+          success: false,
+          error: "At least one face image is required for registration" 
+        });
+      }
+
+      // Extract image buffers
+      const imageBuffers = req.files.map(file => file.buffer);
+
+      const result = await userService.createUserFromImages(
+        firstName.trim(),
+        lastName.trim(),
+        imageBuffers
+      );
+      
+      // Remove sensitive data from response
+      const { faceEmbedding: _removed, faceEmbeddings: _removedEmbeddings, ...safeUser } = result;
+      
+      return res.status(201).json({ 
+        success: true,
+        message: "User registered successfully with advanced face detection",
+        data: safeUser,
+        faceProcessingMetrics: result.faceProcessingResult?.qualityMetrics
+      });
+    } catch (error) {
+      FaceUtils.logDebug('UserController', `Enhanced registration failed: ${error.message}`);
+      return res.status(500).json({ 
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
+  /**
    * Register a new user with face embeddings
    */
   async register(req, res) {
@@ -43,6 +93,36 @@ class UserController {
       return res.status(500).json({ 
         error: error.message,
         success: false 
+      });
+    }
+  }
+
+  /**
+   * Login user with face image (enhanced)
+   */
+  async loginWithImage(req, res) {
+    try {
+      // Check for uploaded image
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ 
+          success: false,
+          error: "Face image is required for login" 
+        });
+      }
+
+      const result = await userService.loginByImage(req.file.buffer);
+      
+      if (!result.success) {
+        FaceUtils.logDebug('UserController', `Image login failed: ${result.message}`);
+        return res.status(401).json(result);
+      }
+
+      return res.json(result);
+    } catch (error) {
+      FaceUtils.logDebug('UserController', `Image login failed: ${error.message}`);
+      return res.status(500).json({ 
+        success: false,
+        error: error.message
       });
     }
   }

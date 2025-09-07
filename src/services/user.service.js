@@ -79,12 +79,151 @@ class UserService {
 
       return saved;
     } catch (error) {
-      throw new Error(`Error creating user: ${error.message}`);
+      FaceUtils.logDebug('UserService', `User creation failed: ${error.message}`);
+      throw new Error(`User creation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a new user with face embeddings from images
+   * @param {string} firstName - User's first name
+   * @param {string} lastName - User's last name
+   * @param {Buffer|Buffer[]} imageBuffers - Single image buffer or array of image buffers
+   * @returns {Object} Created user object
+   */
+  async createUserFromImages(firstName, lastName, imageBuffers) {
+    try {
+      if (!firstName || !lastName) {
+        throw new Error("firstName & lastName required");
+      }
+      
+      if (!imageBuffers) {
+        throw new Error("face images required");
+      }
+
+      // Normalize to array
+      const buffers = Array.isArray(imageBuffers) ? imageBuffers : [imageBuffers];
+      
+      if (buffers.length === 0) {
+        throw new Error("At least one face image required");
+      }
+
+      // Generate embeddings using advanced face detection
+      const embeddingResult = await faceIndex.generateEmbeddings(buffers);
+      
+      if (!embeddingResult.success) {
+        throw new Error("Failed to generate face embeddings from images");
+      }
+
+      const { embeddings, qualityMetrics, samples } = embeddingResult;
+
+      const newUser = this.userRepository.create({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        faceEmbedding: embeddings.mean, // backward compatibility
+        faceEmbeddings: {
+          samples: samples.map(s => s.descriptor),
+          mean: embeddings.mean,
+          median: embeddings.median,
+          qualityMetrics: qualityMetrics
+        },
+        embeddingVersion: 3, // Advanced version
+        lastEmbeddingUpdate: new Date()
+      });
+
+      const saved = await this.userRepository.save(newUser);
+      
+      // Add to face index
+      try {
+        faceIndex.addUser(saved);
+      } catch (e) {
+        FaceUtils.logDebug('UserService', `Failed to add user to index: ${e.message}`);
+      }
+
+      FaceUtils.logDebug('UserService', {
+        operation: 'createUserFromImages',
+        userId: saved.id,
+        qualityMetrics: qualityMetrics
+      });
+
+      return {
+        ...saved,
+        faceProcessingResult: embeddingResult
+      };
+    } catch (error) {
+      FaceUtils.logDebug('UserService', `User creation failed: ${error.message}`);
+      throw new Error(`User creation failed: ${error.message}`);
     }
   }
 
   async login(faceEmbedding) {
     return await this.findByEmbedding(faceEmbedding);
+  }
+
+  /**
+   * Login user using face image with advanced detection
+   * @param {Buffer} imageBuffer - Face image buffer
+   * @param {Object} options - Login options
+   * @returns {Object} Login result with user and token
+   */
+  async loginByImage(imageBuffer, options = {}) {
+    try {
+      const searchResult = await faceIndex.searchByImage(imageBuffer, {
+        threshold: options.threshold || FaceConfig.COSINE_DISTANCE_THRESHOLD,
+        margin: options.margin || FaceConfig.DISTANCE_MARGIN
+      });
+
+      if (!searchResult) {
+        return {
+          success: false,
+          message: "No matching face found",
+          faceQuality: null
+        };
+      }
+
+      const user = await this.getUserById(searchResult.id);
+      if (!user) {
+        return {
+          success: false,
+          message: "User not found",
+          faceQuality: searchResult.faceQuality
+        };
+      }
+
+      const token = sign({ id: user.id });
+
+      FaceUtils.logDebug('UserService', {
+        operation: 'loginByImage',
+        userId: user.id,
+        confidence: searchResult.confidence,
+        faceQuality: searchResult.faceQuality,
+        method: searchResult.searchMethod
+      });
+
+      return {
+        success: true,
+        message: "Authentication successful",
+        user: {
+          id: user.id,
+          firstName: user.firstName,
+          lastName: user.lastName
+        },
+        token,
+        authMetadata: {
+          confidence: searchResult.confidence,
+          distance: searchResult.distance,
+          faceQuality: searchResult.faceQuality,
+          method: searchResult.searchMethod
+        }
+      };
+    } catch (error) {
+      FaceUtils.logDebug('UserService', `Image login failed: ${error.message}`);
+      return {
+        success: false,
+        message: `Authentication failed: ${error.message}`,
+        error: error.message
+      };
+    }
   }
 
   async getAllUsers() {
