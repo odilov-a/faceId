@@ -1,26 +1,45 @@
 /**
  * Advanced Face Detection Service 
- * Uses improved heuristic methods for face detection and descriptor extraction
- * Designed to work without external ML dependencies
+ * Uses Haar Cascade for accurate face detection and improved heuristic methods
+ * Now includes the haarcascade_frontalface_alt.xml for better detection
  */
 const jimp = require('jimp');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const HaarCascadeDetector = require('./haar-cascade');
 
 class FaceDetectionService {
   constructor() {
-    this.modelsLoaded = false; // Always false for simplified implementation
+    this.modelsLoaded = false;
     this.modelPath = path.join(__dirname, '../../models');
-    console.log('Face Detection Service: Using enhanced fallback methods');
+    this.haarDetector = new HaarCascadeDetector();
+    this.useHaarCascade = true; // Enable Haar Cascade by default
+    console.log('Face Detection Service: Using Haar Cascade with fallback methods');
   }
 
   /**
    * Initialize the detection service
    */
   async initialize() {
-    // No models to load, just log initialization
-    console.log('Face Detection Service: Enhanced fallback methods ready');
-    return Promise.resolve();
+    try {
+      // Try to load Haar Cascade
+      console.log('Loading Haar Cascade detector...');
+      const haarLoaded = await this.haarDetector.loadCascade();
+      
+      if (haarLoaded) {
+        console.log('Face Detection Service: Haar Cascade loaded successfully');
+        this.useHaarCascade = true;
+      } else {
+        console.log('Face Detection Service: Falling back to heuristic methods');
+        this.useHaarCascade = false;
+      }
+      
+      return Promise.resolve();
+    } catch (error) {
+      console.error('Error initializing face detection:', error.message);
+      this.useHaarCascade = false;
+      return Promise.resolve();
+    }
   }
 
   /**
@@ -43,11 +62,114 @@ class FaceDetectionService {
       const image = await jimp.read(imageBuffer);
       const processedBuffer = await this.preprocessImage(image);
       
-      // Always use enhanced fallback since we don't have face-api working
+      // Try Haar Cascade first if available
+      if (this.useHaarCascade) {
+        try {
+          console.log('Using Haar Cascade for face detection...');
+          return await this.detectWithHaarCascade(processedBuffer, options);
+        } catch (haarError) {
+          console.warn('Haar Cascade detection failed, falling back to heuristic methods:', haarError.message);
+          this.useHaarCascade = false;
+        }
+      }
+      
+      // Fallback to enhanced heuristic methods
+      console.log('Using enhanced fallback methods for face detection...');
       return await this.detectWithEnhancedFallback(processedBuffer, options);
     } catch (error) {
       throw new Error(`Face detection failed: ${error.message}`);
     }
+  }
+
+  /**
+   * Face detection using Haar Cascade classifier
+   */
+  async detectWithHaarCascade(imageBuffer, options) {
+    const { minFaceSize = 160, maxFaces = 1 } = options;
+    
+    try {
+      // Use Haar Cascade for detection
+      const cascadeDetections = await this.haarDetector.detectFaces(imageBuffer, {
+        scaleFactor: 1.1,
+        minNeighbors: 3,
+        minSize: { width: minFaceSize, height: minFaceSize }
+      });
+      
+      if (cascadeDetections.length === 0) {
+        return {
+          success: false,
+          faces: [],
+          error: 'No faces detected by Haar Cascade',
+          method: 'haar-cascade'
+        };
+      }
+      
+      const image = await jimp.read(imageBuffer);
+      const validFaces = [];
+      
+      // Process detected faces
+      for (let i = 0; i < Math.min(cascadeDetections.length, maxFaces); i++) {
+        const detection = cascadeDetections[i];
+        
+        // Create bounding box
+        const boundingBox = {
+          x: detection.x,
+          y: detection.y,
+          width: detection.width,
+          height: detection.height
+        };
+        
+        // Generate enhanced embedding
+        const embedding = await this.generateEnhancedEmbedding(image, boundingBox);
+        const quality = await this.assessImageQuality(image, boundingBox);
+        
+        // Estimate basic landmarks (simplified)
+        const landmarks = this.estimateLandmarks(boundingBox);
+        
+        validFaces.push({
+          id: uuidv4(),
+          boundingBox: boundingBox,
+          confidence: detection.confidence || 0.85,
+          landmarks: landmarks,
+          descriptor: embedding,
+          quality: quality,
+          pose: this.estimateBasicPose(boundingBox, { width: image.bitmap.width, height: image.bitmap.height }),
+          size: Math.min(boundingBox.width, boundingBox.height),
+          detectionMethod: 'haar-cascade'
+        });
+      }
+      
+      return {
+        success: validFaces.length > 0,
+        faces: validFaces,
+        metadata: {
+          totalDetected: cascadeDetections.length,
+          validFaces: validFaces.length,
+          method: 'haar-cascade',
+          timestamp: new Date().toISOString(),
+          cascadeFile: 'haarcascade_frontalface_alt.xml'
+        }
+      };
+    } catch (error) {
+      throw new Error(`Haar Cascade detection error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Estimate basic facial landmarks from bounding box
+   */
+  estimateLandmarks(boundingBox) {
+    const { x, y, width, height } = boundingBox;
+    
+    // Estimate basic facial landmarks based on typical face proportions
+    return {
+      leftEye: { x: x + width * 0.3, y: y + height * 0.35 },
+      rightEye: { x: x + width * 0.7, y: y + height * 0.35 },
+      nose: { x: x + width * 0.5, y: y + height * 0.55 },
+      leftMouth: { x: x + width * 0.35, y: y + height * 0.75 },
+      rightMouth: { x: x + width * 0.65, y: y + height * 0.75 },
+      chin: { x: x + width * 0.5, y: y + height * 0.9 }
+    };
   }
 
   /**
@@ -294,32 +416,311 @@ class FaceDetectionService {
   }
 
   /**
-   * Generate enhanced embedding using multiple feature extraction techniques
+   * Generate enhanced face embedding using multiple sophisticated features
    */
   async generateEnhancedEmbedding(image, region) {
-    const embedding = new Array(128).fill(0);
+    const embedding = new Array(256).fill(0); // Increased to 256 dimensions for better discrimination
     
-    // Extract multiple types of features
+    // Extract multiple types of sophisticated features
     const features = {
-      texture: this.extractTextureFeatures(image, region),
-      color: this.extractColorFeatures(image, region),
-      gradient: this.extractGradientFeatures(image, region),
-      local: this.extractLocalFeatures(image, region)
+      lbp: this.extractLocalBinaryPatterns(image, region),        // 64 dimensions
+      hog: this.extractHistogramOfGradients(image, region),       // 64 dimensions  
+      gabor: this.extractGaborFeatures(image, region),            // 64 dimensions
+      geometric: this.extractGeometricFeatures(image, region),    // 32 dimensions
+      intensity: this.extractIntensityFeatures(image, region),    // 32 dimensions
     };
 
-    // Combine features into embedding
+    // Combine features into embedding with careful weighting
     let idx = 0;
-    for (const [featureType, values] of Object.entries(features)) {
-      for (let i = 0; i < Math.min(32, values.length); i++) {
-        if (idx < 128) {
-          embedding[idx++] = values[i];
+    
+    // LBP features (most important for face recognition)
+    for (let i = 0; i < Math.min(64, features.lbp.length); i++) {
+      embedding[idx++] = features.lbp[i] * 1.2; // Higher weight
+    }
+    
+    // HOG features (important for structural information)
+    for (let i = 0; i < Math.min(64, features.hog.length); i++) {
+      embedding[idx++] = features.hog[i] * 1.0;
+    }
+    
+    // Gabor features (texture information)
+    for (let i = 0; i < Math.min(64, features.gabor.length); i++) {
+      embedding[idx++] = features.gabor[i] * 0.8;
+    }
+    
+    // Geometric features (face proportions)
+    for (let i = 0; i < Math.min(32, features.geometric.length); i++) {
+      embedding[idx++] = features.geometric[i] * 1.1;
+    }
+    
+    // Intensity features
+    for (let i = 0; i < Math.min(32, features.intensity.length); i++) {
+      embedding[idx++] = features.intensity[i] * 0.9;
+    }
+
+    // Apply PCA-like dimensionality reduction (simplified)
+    const reducedEmbedding = this.applyDimensionalityReduction(embedding);
+    
+    // L2 normalize embedding for cosine similarity
+    const norm = Math.sqrt(reducedEmbedding.reduce((sum, val) => sum + val * val, 0));
+    return reducedEmbedding.map(val => norm > 0 ? val / norm : 0);
+  }
+
+  /**
+   * Extract Local Binary Patterns (LBP) - excellent for face recognition
+   */
+  extractLocalBinaryPatterns(image, region) {
+    const features = [];
+    const { x, y, width, height } = region;
+    const histogram = new Array(256).fill(0);
+    
+    // Convert region to grayscale and calculate LBP
+    const grayData = [];
+    image.scan(x, y, width, height, function (px, py, idx) {
+      const gray = Math.round(0.299 * this.bitmap.data[idx] + 0.587 * this.bitmap.data[idx + 1] + 0.114 * this.bitmap.data[idx + 2]);
+      grayData.push(gray);
+    });
+    
+    // Calculate LBP for each pixel (excluding borders)
+    for (let py = 1; py < height - 1; py++) {
+      for (let px = 1; px < width - 1; px++) {
+        const centerIdx = py * width + px;
+        const center = grayData[centerIdx];
+        
+        let pattern = 0;
+        const offsets = [-width-1, -width, -width+1, 1, width+1, width, width-1, -1];
+        
+        for (let i = 0; i < 8; i++) {
+          const neighborIdx = centerIdx + offsets[i];
+          if (neighborIdx >= 0 && neighborIdx < grayData.length) {
+            if (grayData[neighborIdx] >= center) {
+              pattern |= (1 << i);
+            }
+          }
+        }
+        
+        histogram[pattern]++;
+      }
+    }
+    
+    // Normalize histogram
+    const total = histogram.reduce((sum, val) => sum + val, 0);
+    return histogram.map(val => total > 0 ? val / total : 0);
+  }
+
+  /**
+   * Extract Histogram of Oriented Gradients (HOG)
+   */
+  extractHistogramOfGradients(image, region) {
+    const { x, y, width, height } = region;
+    const cellSize = Math.max(8, Math.floor(Math.min(width, height) / 8));
+    const numBins = 9;
+    const features = [];
+    
+    // Convert to grayscale
+    const grayData = [];
+    image.scan(x, y, width, height, function (px, py, idx) {
+      const gray = Math.round(0.299 * this.bitmap.data[idx] + 0.587 * this.bitmap.data[idx + 1] + 0.114 * this.bitmap.data[idx + 2]);
+      grayData.push(gray);
+    });
+    
+    // Calculate gradients
+    const gradX = [];
+    const gradY = [];
+    const magnitude = [];
+    const orientation = [];
+    
+    for (let py = 0; py < height; py++) {
+      for (let px = 0; px < width; px++) {
+        const idx = py * width + px;
+        
+        // Calculate gradients (with boundary checks)
+        const gx = px < width - 1 ? (grayData[idx + 1] || 0) - (px > 0 ? grayData[idx - 1] || 0 : 0) : 0;
+        const gy = py < height - 1 ? (grayData[idx + width] || 0) - (py > 0 ? grayData[idx - width] || 0 : 0) : 0;
+        
+        gradX[idx] = gx;
+        gradY[idx] = gy;
+        magnitude[idx] = Math.sqrt(gx * gx + gy * gy);
+        orientation[idx] = Math.atan2(gy, gx) * 180 / Math.PI;
+        if (orientation[idx] < 0) orientation[idx] += 180;
+      }
+    }
+    
+    // Calculate HOG for each cell
+    for (let cellY = 0; cellY < Math.floor(height / cellSize); cellY++) {
+      for (let cellX = 0; cellX < Math.floor(width / cellSize); cellX++) {
+        const histogram = new Array(numBins).fill(0);
+        
+        for (let py = cellY * cellSize; py < (cellY + 1) * cellSize && py < height; py++) {
+          for (let px = cellX * cellSize; px < (cellX + 1) * cellSize && px < width; px++) {
+            const idx = py * width + px;
+            const bin = Math.floor(orientation[idx] / (180 / numBins));
+            const binIdx = Math.max(0, Math.min(numBins - 1, bin));
+            histogram[binIdx] += magnitude[idx];
+          }
+        }
+        
+        // Normalize histogram
+        const total = histogram.reduce((sum, val) => sum + val, 0);
+        if (total > 0) {
+          histogram.forEach(val => features.push(val / total));
+        } else {
+          histogram.forEach(() => features.push(0));
         }
       }
     }
+    
+    return features.slice(0, 64);
+  }
 
-    // Normalize embedding
-    const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    return embedding.map(val => norm > 0 ? val / norm : 0);
+  /**
+   * Extract Gabor filter responses for texture analysis
+   */
+  extractGaborFeatures(image, region) {
+    const { x, y, width, height } = region;
+    const features = [];
+    
+    // Simple approximation of Gabor filters using different orientations
+    const orientations = [0, 45, 90, 135];
+    const frequencies = [0.1, 0.2, 0.3, 0.4];
+    
+    for (const orientation of orientations) {
+      for (const frequency of frequencies) {
+        let response = 0;
+        let count = 0;
+        
+        image.scan(x, y, width, height, function (px, py, idx) {
+          const gray = (this.bitmap.data[idx] + this.bitmap.data[idx + 1] + this.bitmap.data[idx + 2]) / 3;
+          
+          // Simple gabor-like response calculation
+          const angle = orientation * Math.PI / 180;
+          const rotatedX = (px - x - width/2) * Math.cos(angle) + (py - y - height/2) * Math.sin(angle);
+          const rotatedY = -(px - x - width/2) * Math.sin(angle) + (py - y - height/2) * Math.cos(angle);
+          
+          const gaborResponse = Math.exp(-(rotatedX*rotatedX + rotatedY*rotatedY) / (2 * 100)) * 
+                               Math.cos(2 * Math.PI * frequency * rotatedX) * gray / 255;
+          
+          response += gaborResponse;
+          count++;
+        });
+        
+        features.push(count > 0 ? response / count : 0);
+      }
+    }
+    
+    return features;
+  }
+
+  /**
+   * Extract geometric features based on face proportions
+   */
+  extractGeometricFeatures(image, region) {
+    const { x, y, width, height } = region;
+    const features = [];
+    
+    // Face proportions and ratios
+    features.push(width / height);                    // Aspect ratio
+    features.push(width / image.bitmap.width);        // Relative width
+    features.push(height / image.bitmap.height);      // Relative height
+    features.push((x + width/2) / image.bitmap.width); // Center X position
+    features.push((y + height/2) / image.bitmap.height); // Center Y position
+    
+    // Intensity distribution features
+    let topHalf = 0, bottomHalf = 0, leftHalf = 0, rightHalf = 0;
+    let count = 0;
+    
+    image.scan(x, y, width, height, function (px, py, idx) {
+      const intensity = (this.bitmap.data[idx] + this.bitmap.data[idx + 1] + this.bitmap.data[idx + 2]) / 3;
+      
+      if (py - y < height / 2) topHalf += intensity;
+      else bottomHalf += intensity;
+      
+      if (px - x < width / 2) leftHalf += intensity;
+      else rightHalf += intensity;
+      
+      count++;
+    });
+    
+    if (count > 0) {
+      features.push(topHalf / (count/2));     // Average top half intensity
+      features.push(bottomHalf / (count/2));  // Average bottom half intensity
+      features.push(leftHalf / (count/2));    // Average left half intensity
+      features.push(rightHalf / (count/2));   // Average right half intensity
+      features.push((topHalf - bottomHalf) / count);  // Top-bottom contrast
+      features.push((leftHalf - rightHalf) / count);  // Left-right contrast
+    }
+    
+    // Add statistical moments
+    const pixels = [];
+    image.scan(x, y, width, height, function (px, py, idx) {
+      pixels.push((this.bitmap.data[idx] + this.bitmap.data[idx + 1] + this.bitmap.data[idx + 2]) / 3);
+    });
+    
+    if (pixels.length > 0) {
+      const mean = pixels.reduce((sum, val) => sum + val, 0) / pixels.length;
+      const variance = pixels.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / pixels.length;
+      const skewness = pixels.reduce((sum, val) => sum + Math.pow(val - mean, 3), 0) / (pixels.length * Math.pow(variance, 1.5));
+      const kurtosis = pixels.reduce((sum, val) => sum + Math.pow(val - mean, 4), 0) / (pixels.length * Math.pow(variance, 2));
+      
+      features.push(mean / 255);
+      features.push(Math.sqrt(variance) / 255);
+      features.push(skewness);
+      features.push(kurtosis);
+    }
+    
+    // Pad or truncate to exactly 32 features
+    while (features.length < 32) features.push(0);
+    return features.slice(0, 32);
+  }
+
+  /**
+   * Extract intensity-based features
+   */
+  extractIntensityFeatures(image, region) {
+    const { x, y, width, height } = region;
+    const features = [];
+    const histogram = new Array(32).fill(0); // 32-bin intensity histogram
+    
+    // Build intensity histogram
+    let pixelCount = 0;
+    image.scan(x, y, width, height, function (px, py, idx) {
+      const intensity = (this.bitmap.data[idx] + this.bitmap.data[idx + 1] + this.bitmap.data[idx + 2]) / 3;
+      const bin = Math.min(31, Math.floor(intensity / 8)); // 256/32 = 8
+      histogram[bin]++;
+      pixelCount++;
+    });
+    
+    // Normalize histogram
+    for (let i = 0; i < histogram.length; i++) {
+      features.push(pixelCount > 0 ? histogram[i] / pixelCount : 0);
+    }
+    
+    return features;
+  }
+
+  /**
+   * Apply simple dimensionality reduction (PCA-like)
+   */
+  applyDimensionalityReduction(embedding) {
+    // Simple feature selection and compression
+    const reduced = new Array(128);
+    
+    // Take every other feature and combine with weighted neighbors
+    for (let i = 0; i < 128; i++) {
+      const sourceIdx = i * 2;
+      if (sourceIdx < embedding.length) {
+        reduced[i] = embedding[sourceIdx];
+        
+        // Add weighted contribution from neighbors
+        if (sourceIdx + 1 < embedding.length) {
+          reduced[i] = reduced[i] * 0.8 + embedding[sourceIdx + 1] * 0.2;
+        }
+      } else {
+        reduced[i] = 0;
+      }
+    }
+    
+    return reduced;
   }
 
   /**

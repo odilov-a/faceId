@@ -320,16 +320,20 @@ class FaceIndex {
    * @returns {Object} Index statistics
    */
   getStats() {
+    const detectionMethod = FaceDetectionService.useHaarCascade ? 'haar-cascade' : 
+                           (FaceDetectionService.modelsLoaded ? 'advanced' : 'fallback');
+    
     return {
       userCount: this.entries.length,
       version: this.version,
       loaded: this.loaded,
       totalEmbeddings: this.entries.reduce((sum, entry) => sum + entry.embeddings.length, 0),
-      faceDetectionService: FaceDetectionService.modelsLoaded ? 'advanced' : 'fallback',
+      faceDetectionService: detectionMethod,
       capabilities: {
+        haarCascadeDetection: FaceDetectionService.useHaarCascade,
         advancedDetection: FaceDetectionService.modelsLoaded,
-        landmarkDetection: FaceDetectionService.modelsLoaded,
-        poseEstimation: FaceDetectionService.modelsLoaded,
+        landmarkDetection: FaceDetectionService.modelsLoaded || FaceDetectionService.useHaarCascade,
+        poseEstimation: FaceDetectionService.modelsLoaded || FaceDetectionService.useHaarCascade,
         qualityAssessment: true
       }
     };

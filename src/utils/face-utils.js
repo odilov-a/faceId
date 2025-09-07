@@ -3,10 +3,10 @@
 // Used by both frontend and backend to maintain consistency
 
 const FaceConfig = {
-    // Face recognition thresholds
-    COSINE_DISTANCE_THRESHOLD: parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.6"),
-    EUCLIDEAN_DISTANCE_THRESHOLD: parseFloat(process.env.EUCLIDEAN_THRESHOLD || "0.8"),
-    DISTANCE_MARGIN: parseFloat(process.env.FACE_DISTANCE_MARGIN || "0.05"),
+    // Face recognition thresholds - Adjusted for improved descriptors
+    COSINE_DISTANCE_THRESHOLD: parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.75"), // Increased for better discrimination
+    EUCLIDEAN_DISTANCE_THRESHOLD: parseFloat(process.env.EUCLIDEAN_THRESHOLD || "0.9"),
+    DISTANCE_MARGIN: parseFloat(process.env.FACE_DISTANCE_MARGIN || "0.08"), // Increased margin
     
     // Face validation parameters
     MIN_VALID_FRAMES: parseInt(process.env.MIN_VALID_FRAMES || "3"),
@@ -21,8 +21,8 @@ const FaceConfig = {
     // Debug settings
     DEBUG_ENABLED: process.env.FACE_DEBUG === "1",
     
-    // Model settings
-    EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || "128"),
+    // Model settings - Updated for new descriptor size
+    EMBEDDING_DIMENSION: parseInt(process.env.EMBEDDING_DIMENSION || "128"), // Still 128 after reduction
     MODEL_INPUT_SIZE: parseInt(process.env.MODEL_INPUT_SIZE || "224"),
     FACE_DETECTION_SCORE_THRESHOLD: parseFloat(process.env.DETECTION_SCORE_THRESHOLD || "0.4")
 };
