@@ -91,7 +91,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="../assets/js/api.js"></script>
-    <script src="../assets/js/face-capture.js"></script>
+    <script src="../assets/js/face-unified.js"></script>
     <script>
         let faceCapture = null;
         
@@ -151,42 +151,55 @@
             Utils.showLoading('Analyzing face...');
 
             try {
-                // Capture face
-                const result = await FaceUtils.captureFace(faceCapture, 5, 120, { debug: false });
+                // Capture face using unified utilities
+                const result = await FaceUtils.captureFace(faceCapture, 5, 120, { 
+                    debug: false,
+                    minValid: 3,
+                    allowFallback: true,
+                    useModel: true
+                });
                 
-                // Authenticate with backend using multi-embedding array
+                // Authenticate with backend using embeddings
                 const response = await api.userLogin(result.embeddings);
                 
-                // Store authentication data
-                api.setAuthToken(response.token);
-                localStorage.setItem('userInfo', JSON.stringify(response.data));
-                localStorage.setItem('userRole', 'user');
-                
-                Utils.hideLoading();
-                
-                // Show success modal
-                document.getElementById('welcomeUser').textContent = 
-                    `${response.data.firstName} ${response.data.lastName}`;
-                
-                const successModal = new bootstrap.Modal(document.getElementById('successModal'));
-                successModal.show();
-                
-                // Stop camera
-                stopCamera();
-                
-                // Redirect after 3 seconds
-                setTimeout(() => {
-                    window.location.href = 'dashboard.html';
-                }, 3000);
+                if (response.success) {
+                    // Store authentication data
+                    api.setAuthToken(response.token);
+                    localStorage.setItem('userInfo', JSON.stringify(response.data));
+                    localStorage.setItem('userRole', 'user');
+                    
+                    Utils.hideLoading();
+                    
+                    // Show success modal
+                    document.getElementById('welcomeUser').textContent = 
+                        `${response.data.firstName} ${response.data.lastName}`;
+                    
+                    const successModal = new bootstrap.Modal(document.getElementById('successModal'));
+                    successModal.show();
+                    
+                    // Stop camera
+                    stopCamera();
+                    
+                    // Redirect after 3 seconds
+                    setTimeout(() => {
+                        window.location.href = 'dashboard.html';
+                    }, 3000);
+                } else {
+                    throw new Error(response.message || 'Authentication failed');
+                }
                 
             } catch (error) {
                 Utils.hideLoading();
                 
-                if (error.message.includes('not recognized')) {
+                if (error.message.includes('not recognized') || error.message.includes('Face ID')) {
                     Utils.showAlert('Face not recognized. Please ensure you are registered in the system.', 'warning');
+                } else if (error.message.includes('valid frames')) {
+                    Utils.showAlert('Unable to capture clear face image. Please improve lighting and try again.', 'warning');
                 } else {
                     Utils.showAlert('Authentication failed: ' + error.message, 'danger');
                 }
+                
+                FaceUtils.logDebug('Login', { error: error.message });
             }
         }
 

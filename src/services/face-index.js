@@ -2,67 +2,196 @@
 // NOTE: Resets on server restart. For production persist or rebuild on boot.
 const { User } = require('../entities/User.js');
 const { AppDataSource } = require('../config/data-source.js');
+const { FaceUtils, FaceConfig } = require('../utils/face-utils.js');
 
 class FaceIndex {
-  constructor(){
-    this.entries = []; // { id, mean, variants }
+  constructor() {
+    this.entries = []; // { id, embeddings: [mean, median, ...samples] }
     this.version = 0;
     this.loaded = false;
   }
 
-  async rebuild(){
-    const repo = AppDataSource.getRepository(User);
-    const users = await repo.find();
-    this.entries = users.filter(u=>u.faceEmbeddings?.mean).map(u=>({
-      id: u.id,
-      mean: u.faceEmbeddings.mean,
-      variants: [u.faceEmbeddings.mean, u.faceEmbeddings.median, ...(u.faceEmbeddings.samples||[]).slice(0,5)]
-    }));
-    this.version++;
-    this.loaded = true;
-    return { count: this.entries.length, version: this.version };
+  /**
+   * Rebuild the face index from database
+   * @returns {Object} Rebuild statistics
+   */
+  async rebuild() {
+    try {
+      const repo = AppDataSource.getRepository(User);
+      const users = await repo.find();
+      
+      this.entries = users
+        .filter(user => user.faceEmbeddings?.mean)
+        .map(user => ({
+          id: user.id,
+          embeddings: [
+            user.faceEmbeddings.mean,
+            user.faceEmbeddings.median,
+            ...(user.faceEmbeddings.samples || []).slice(0, 5)
+          ].filter(emb => Array.isArray(emb) && emb.length > 0)
+        }))
+        .filter(entry => entry.embeddings.length > 0);
+
+      this.version++;
+      this.loaded = true;
+      
+      FaceUtils.logDebug('FaceIndex', `Rebuilt with ${this.entries.length} users`);
+      
+      return { 
+        count: this.entries.length, 
+        version: this.version,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      FaceUtils.logDebug('FaceIndex', `Rebuild failed: ${error.message}`);
+      throw new Error(`Failed to rebuild face index: ${error.message}`);
+    }
   }
 
-  ensureLoaded(){ if(!this.loaded) throw new Error('Face index not loaded'); }
-
-  cosineDistance(a,b){
-    let dot=0, na=0, nb=0; for (let i=0;i<a.length;i++){ const av=a[i], bv=b[i]; dot+=av*bv; na+=av*av; nb+=bv*bv; }
-    return 1 - (dot / (Math.sqrt(na)*Math.sqrt(nb)));
+  /**
+   * Ensure the index is loaded
+   */
+  ensureLoaded() {
+    if (!this.loaded) {
+      throw new Error('Face index not loaded. Call rebuild() first.');
+    }
   }
 
-  search(queryEmb, { threshold = 0.45, margin = 0.05 } = {}) {
+  /**
+   * Search for the best matching face in the index
+   * @param {number[]} queryEmbedding - The face embedding to search for
+   * @param {Object} options - Search options
+   * @returns {Object|null} Best match result or null if no match found
+   */
+  search(queryEmbedding, options = {}) {
+    const {
+      threshold = FaceConfig.COSINE_DISTANCE_THRESHOLD,
+      margin = FaceConfig.DISTANCE_MARGIN,
+      maxResults = 5
+    } = options;
+
     this.ensureLoaded();
-    let best = null, bestDist = Infinity, second = Infinity;
-    const ranked = [];
-    for (const e of this.entries) {
-      const distances = e.variants.filter(v=>v.length===queryEmb.length).map(v=>this.cosineDistance(v, queryEmb));
-      if (!distances.length) continue;
-      const dist = Math.min(...distances);
-      ranked.push({ id: e.id, distance: dist });
-      if (dist < bestDist) { second = bestDist; bestDist = dist; best = e; }
-      else if (dist < second) { second = dist; }
+
+    if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
+      throw new Error('Query embedding must be a non-empty array');
     }
-    if (!best) return null;
-    const marginOk = (second - bestDist) >= margin || second === Infinity;
-    if (bestDist < threshold && marginOk) {
-      return { id: best.id, distance: bestDist, secondDistance: second, ranked: ranked.sort((a,b)=>a.distance-b.distance).slice(0,5) };
+
+    // Use the centralized matching logic
+    const result = FaceUtils.findBestMatch(queryEmbedding, this.entries, {
+      threshold,
+      margin,
+      distanceFunction: 'cosine'
+    });
+
+    if (result) {
+      FaceUtils.logDebug('FaceIndex', {
+        operation: 'search',
+        matchId: result.match.id,
+        distance: result.distance,
+        confidence: result.confidence,
+        margin: result.margin
+      });
+
+      return {
+        id: result.match.id,
+        distance: result.distance,
+        secondDistance: result.secondDistance,
+        confidence: result.confidence,
+        ranked: result.allMatches.slice(0, maxResults)
+      };
     }
+
     return null;
   }
 
-  addUser(user){
-    // user with faceEmbeddings
-    if (!user || !user.id || !user.faceEmbeddings?.mean) return;
-    const entry = {
-      id: user.id,
-      mean: user.faceEmbeddings.mean,
-      variants: [user.faceEmbeddings.mean, user.faceEmbeddings.median, ...(user.faceEmbeddings.samples||[]).slice(0,5)]
+  /**
+   * Add or update a user in the index
+   * @param {Object} user - User object with face embeddings
+   */
+  addUser(user) {
+    if (!user || !user.id || !user.faceEmbeddings?.mean) {
+      FaceUtils.logDebug('FaceIndex', 'Invalid user data for addUser');
+      return;
+    }
+
+    try {
+      const embeddings = [
+        user.faceEmbeddings.mean,
+        user.faceEmbeddings.median,
+        ...(user.faceEmbeddings.samples || []).slice(0, 5)
+      ].filter(emb => Array.isArray(emb) && emb.length > 0);
+
+      if (embeddings.length === 0) {
+        FaceUtils.logDebug('FaceIndex', `No valid embeddings for user ${user.id}`);
+        return;
+      }
+
+      const entry = {
+        id: user.id,
+        embeddings
+      };
+
+      // Replace if exists, otherwise add new entry
+      const existingIndex = this.entries.findIndex(e => e.id === user.id);
+      if (existingIndex >= 0) {
+        this.entries[existingIndex] = entry;
+      } else {
+        this.entries.push(entry);
+      }
+
+      this.version++;
+      this.loaded = true;
+      
+      FaceUtils.logDebug('FaceIndex', {
+        operation: 'addUser',
+        userId: user.id,
+        embeddingCount: embeddings.length,
+        version: this.version
+      });
+    } catch (error) {
+      FaceUtils.logDebug('FaceIndex', `Failed to add user ${user.id}: ${error.message}`);
+    }
+  }
+
+  /**
+   * Remove a user from the index
+   * @param {string|number} userId - User ID to remove
+   */
+  removeUser(userId) {
+    const initialCount = this.entries.length;
+    this.entries = this.entries.filter(entry => entry.id !== userId);
+    
+    if (this.entries.length < initialCount) {
+      this.version++;
+      FaceUtils.logDebug('FaceIndex', {
+        operation: 'removeUser',
+        userId,
+        version: this.version
+      });
+    }
+  }
+
+  /**
+   * Get index statistics
+   * @returns {Object} Index statistics
+   */
+  getStats() {
+    return {
+      userCount: this.entries.length,
+      version: this.version,
+      loaded: this.loaded,
+      totalEmbeddings: this.entries.reduce((sum, entry) => sum + entry.embeddings.length, 0)
     };
-    // replace if exists
-    const idx = this.entries.findIndex(e=>e.id===user.id);
-    if (idx>=0) this.entries[idx] = entry; else this.entries.push(entry);
+  }
+
+  /**
+   * Clear the index
+   */
+  clear() {
+    this.entries = [];
     this.version++;
-    this.loaded = true;
+    this.loaded = false;
+    FaceUtils.logDebug('FaceIndex', 'Index cleared');
   }
 }
 

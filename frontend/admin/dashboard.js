@@ -138,10 +138,18 @@ async function captureFace() {
     
     try {
         Utils.showLoading('Processing face capture...');
-    const result = await FaceUtils.captureFace(faceCapture, 5, 120, { debug: false });
-    capturedFaceEmbeddings = result.embeddings; // store entire set
         
-        // Show preview
+        // Capture face using unified utilities with improved settings
+        const result = await FaceUtils.captureFace(faceCapture, 5, 120, { 
+            debug: false,
+            minValid: 3,
+            allowFallback: true,
+            useModel: true // Try face-api.js first, fallback to heuristic
+        });
+        
+        capturedFaceEmbeddings = result.embeddings; // Store entire set
+        
+        // Show preview with additional info
         const preview = document.getElementById('capturePreview');
         preview.innerHTML = `
             <img src="${result.imageData}" class="img-fluid rounded" style="max-height: 200px;">
@@ -149,15 +157,28 @@ async function captureFace() {
                 <i class="fas fa-check-circle me-2"></i>
                 Face captured successfully!
             </div>
+            <div class="small text-muted mt-1">
+                Quality: ${result.validFrames}/${result.embeddings.length} frames
+                ${result.method ? `(${result.method})` : ''}
+            </div>
         `;
         
         document.getElementById('submitBtn').disabled = false;
         Utils.hideLoading();
-        Utils.showAlert('Face captured successfully!', 'success');
+        Utils.showAlert(`Face captured successfully! ${result.validFrames} valid frames processed.`, 'success');
         
     } catch (error) {
         Utils.hideLoading();
-        Utils.showAlert('Capture failed: ' + error.message, 'danger');
+        
+        if (error.message.includes('valid frames')) {
+            Utils.showAlert('Face capture quality too low. Please improve lighting and positioning, then try again.', 'warning');
+        } else if (error.message.includes('camera')) {
+            Utils.showAlert('Camera error: ' + error.message, 'danger');
+        } else {
+            Utils.showAlert('Capture failed: ' + error.message, 'danger');
+        }
+        
+        FaceUtils.logDebug('AdminCapture', { error: error.message });
     }
 }
 
@@ -181,8 +202,13 @@ function stopFaceCapture() {
 document.getElementById('addUserForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const firstName = document.getElementById('firstName').value;
-    const lastName = document.getElementById('lastName').value;
+    const firstName = document.getElementById('firstName').value.trim();
+    const lastName = document.getElementById('lastName').value.trim();
+    
+    if (!firstName || !lastName) {
+        Utils.showAlert('Please fill in both first name and last name', 'warning');
+        return;
+    }
     
     if (!capturedFaceEmbeddings || !capturedFaceEmbeddings.length) {
         Utils.showAlert('Please capture a face first', 'warning');
@@ -192,26 +218,38 @@ document.getElementById('addUserForm').addEventListener('submit', async (e) => {
     Utils.showLoading('Adding user...');
     
     try {
-    await api.userRegister(firstName, lastName, capturedFaceEmbeddings);
+        const response = await api.userRegister(firstName, lastName, capturedFaceEmbeddings);
         
         Utils.hideLoading();
-        Utils.showAlert('User added successfully!', 'success');
         
-        // Reset form
-        document.getElementById('addUserForm').reset();
-    capturedFaceEmbeddings = null;
-        document.getElementById('submitBtn').disabled = true;
-        document.getElementById('capturePreview').innerHTML = `
-            <i class="fas fa-image fa-3x text-muted mb-3"></i>
-            <div class="text-muted">Captured face will appear here</div>
-        `;
-        
-        stopFaceCapture();
-        loadUsers();
+        if (response.success) {
+            Utils.showAlert('User added successfully!', 'success');
+            
+            // Reset form
+            document.getElementById('addUserForm').reset();
+            capturedFaceEmbeddings = null;
+            document.getElementById('submitBtn').disabled = true;
+            document.getElementById('capturePreview').innerHTML = `
+                <i class="fas fa-image fa-3x text-muted mb-3"></i>
+                <div class="text-muted">Captured face will appear here</div>
+            `;
+            
+            stopFaceCapture();
+            loadUsers();
+        } else {
+            throw new Error(response.error || 'Registration failed');
+        }
         
     } catch (error) {
         Utils.hideLoading();
-        Utils.showAlert('Error adding user: ' + error.message, 'danger');
+        
+        if (error.message.includes('embeddings')) {
+            Utils.showAlert('Face data quality issue: ' + error.message, 'warning');
+        } else {
+            Utils.showAlert('Error adding user: ' + error.message, 'danger');
+        }
+        
+        FaceUtils.logDebug('AdminRegister', { error: error.message });
     }
 });
 
