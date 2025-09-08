@@ -3,10 +3,11 @@
 // Used by both frontend and backend to maintain consistency
 
 const FaceConfig = {
-    // Face recognition thresholds - Adjusted for improved descriptors
-    COSINE_DISTANCE_THRESHOLD: parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.75"), // Increased for better discrimination
+    // Face recognition thresholds - Optimized for multi-person recognition
+    COSINE_DISTANCE_THRESHOLD: parseFloat(process.env.FACE_MATCH_THRESHOLD || "0.65"), // Lowered for multi-person
     EUCLIDEAN_DISTANCE_THRESHOLD: parseFloat(process.env.EUCLIDEAN_THRESHOLD || "0.9"),
-    DISTANCE_MARGIN: parseFloat(process.env.FACE_DISTANCE_MARGIN || "0.08"), // Increased margin
+    // Minimum margin between best and second-best matches
+    DISTANCE_MARGIN: 0.0005,
     
     // Face validation parameters
     MIN_VALID_FRAMES: parseInt(process.env.MIN_VALID_FRAMES || "3"),
@@ -269,6 +270,7 @@ class FaceUtils {
         }
 
         if (!Array.isArray(candidates) || candidates.length === 0) {
+            this.logDebug('FaceUtils', 'No candidates provided for matching');
             return null;
         }
 
@@ -280,6 +282,8 @@ class FaceUtils {
         let bestDistance = Infinity;
         let secondBestDistance = Infinity;
         const allMatches = [];
+
+        this.logDebug('FaceUtils', `Starting search with ${candidates.length} candidates, threshold: ${threshold}, margin: ${margin}`);
 
         candidates.forEach(candidate => {
             if (!candidate.id || !Array.isArray(candidate.embeddings)) {
@@ -295,6 +299,8 @@ class FaceUtils {
             const minDistance = Math.min(...distances);
             allMatches.push({ id: candidate.id, distance: minDistance });
 
+            this.logDebug('FaceUtils', `Candidate ID ${candidate.id}: distance = ${minDistance.toFixed(4)}`);
+
             if (minDistance < bestDistance) {
                 secondBestDistance = bestDistance;
                 bestDistance = minDistance;
@@ -304,15 +310,22 @@ class FaceUtils {
             }
         });
 
+        this.logDebug('FaceUtils', `Best distance: ${bestDistance.toFixed(4)}, Second best: ${secondBestDistance.toFixed(4)}`);
+
         // Apply threshold and margin checks
         if (!bestMatch || bestDistance >= threshold) {
+            this.logDebug('FaceUtils', `Match rejected: distance ${bestDistance.toFixed(4)} >= threshold ${threshold}`);
             return null;
         }
 
         const marginCheck = (secondBestDistance - bestDistance) >= margin || secondBestDistance === Infinity;
         if (!marginCheck) {
+            const actualMargin = secondBestDistance - bestDistance;
+            this.logDebug('FaceUtils', `Match rejected: margin ${actualMargin.toFixed(4)} < required margin ${margin}`);
             return null;
         }
+
+        this.logDebug('FaceUtils', `Match accepted: ID ${bestMatch.id}, distance ${bestDistance.toFixed(4)}`);
 
         return {
             match: bestMatch,

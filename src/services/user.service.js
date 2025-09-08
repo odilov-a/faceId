@@ -290,6 +290,8 @@ class UserService {
    */
   async findByEmbedding(faceEmbeddingOrEmbeddings, options = {}) {
     try {
+      FaceUtils.logDebug('UserService', `Starting findByEmbedding search`);
+      
       // Normalize input to array of embeddings
       let embeddings = Array.isArray(faceEmbeddingOrEmbeddings[0]) 
         ? faceEmbeddingOrEmbeddings 
@@ -372,6 +374,13 @@ class UserService {
             )
           };
         }).filter(candidate => candidate.embeddings.length > 0);
+
+        FaceUtils.logDebug('UserService', `Linear search with ${candidates.length} candidates from ${users.length} total users`);
+        FaceUtils.logDebug('UserService', `Query embedding length: ${queryEmbedding.length}`);
+        
+        candidates.forEach(candidate => {
+          FaceUtils.logDebug('UserService', `Candidate ${candidate.id} (${candidate.user.firstName} ${candidate.user.lastName}): ${candidate.embeddings.length} embeddings`);
+        });
 
         const bestMatch = FaceUtils.findBestMatch(queryEmbedding, candidates, {
           threshold: FaceConfig.COSINE_DISTANCE_THRESHOLD,
