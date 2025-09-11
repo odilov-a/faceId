@@ -53,6 +53,18 @@ body {
     box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.3);
 }
 
+/* Face out-of-circle indicator */
+.camera-overlay.error {
+    border-color: #ff4d4f; /* red */
+    box-shadow: 0 0 0 9999px rgba(255, 0, 0, 0.22);
+}
+
+/* Face inside circle indicator */
+.camera-overlay.success {
+    border-color: #52c41a; /* green */
+    box-shadow: 0 0 0 9999px rgba(82, 196, 26, 0.18);
+}
+
 .capture-btn {
     border-radius: 50px;
     padding: 12px 30px;

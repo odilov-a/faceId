@@ -261,6 +261,7 @@ class FaceCapture {
         this.canvas = document.getElementById(canvasElementId);
         this.stream = null;
         this.isCapturing = false;
+    this._monitorHandle = null;
     }
 
     /**
@@ -290,6 +291,8 @@ class FaceCapture {
                 console.log('[FaceCapture] Camera started successfully');
             }
 
+            // Start overlay monitoring if overlay exists
+            try { this.startOverlayMonitor(); } catch(_) {}
             return true;
         } catch (error) {
             console.error('[FaceCapture] Camera error:', error);
@@ -309,9 +312,247 @@ class FaceCapture {
             this.video.srcObject = null;
         }
         this.isCapturing = false;
+    this.stopOverlayMonitor();
         
         if (FrontendFaceConfig.DEBUG_ENABLED) {
             console.log('[FaceCapture] Camera stopped');
+        }
+    }
+
+    /**
+     * Continuously checks whether the detected face is within the circle overlay and toggles red border.
+     * Uses face-api.js when available; otherwise falls back to a center-based heuristic.
+     */
+    startOverlayMonitor() {
+        // Prefer overlay within the same camera container as the video
+        let overlay = null;
+        if (this.video) {
+            const container = this.video.closest('.camera-container') || document;
+            overlay = container.querySelector('.camera-overlay') || document.querySelector('.camera-overlay');
+        } else {
+            overlay = document.querySelector('.camera-overlay');
+        }
+        if (!overlay || !this.video) return;
+    if (this._monitorHandle) return; // already running
+
+    const checkIntervalMs = 150;
+        const video = this.video;
+        const getCircle = () => {
+            // Use the overlay element rect to avoid any layout mismatches
+            const orect = overlay.getBoundingClientRect();
+            const cx = orect.left + orect.width / 2;
+            const cy = orect.top + orect.height / 2;
+            const r = Math.min(orect.width, orect.height) / 2;
+            return { cx, cy, r };
+        };
+
+        const isBBoxInsideCircle = (bbox) => {
+            const { left, top, width, height } = bbox; // in page pixels
+            const centerX = left + width / 2;
+            const centerY = top + height / 2;
+            const circle = getCircle();
+            const dx = centerX - circle.cx;
+            const dy = centerY - circle.cy;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            // Accept if face center is within the circle (slightly lenient tolerance)
+            const centerInside = dist <= circle.r * 1.2;
+            return centerInside;
+        };
+
+        const mark = (out) => {
+            if (out) {
+                overlay.classList.add('error');
+                overlay.classList.remove('success');
+            } else {
+                overlay.classList.remove('error');
+                overlay.classList.add('success');
+            }
+        };
+
+    const loop = async () => {
+            if (!video || video.readyState < 2) { mark(false); return; }
+            try {
+                if (typeof faceapi !== 'undefined') {
+                    // Detect all faces and accept if any is inside the circle
+                    const detections = await faceapi.detectAllFaces(
+                        video,
+                        new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 })
+                    );
+
+                    const rect = video.getBoundingClientRect();
+                    const vw = video.videoWidth || 0;
+                    const vh = video.videoHeight || 0;
+                    if (!vw || !vh) { mark(true); return; }
+
+                    const fit = getComputedStyle(video).objectFit || 'fill';
+                    let scaleX = 1, scaleY = 1, offsetLeft = rect.left, offsetTop = rect.top;
+                    if (fit === 'cover' || fit === 'contain') {
+                        const s = (fit === 'cover')
+                            ? Math.max(rect.width / vw, rect.height / vh)
+                            : Math.min(rect.width / vw, rect.height / vh);
+                        const dispW = vw * s;
+                        const dispH = vh * s;
+                        scaleX = scaleY = s;
+                        offsetLeft = rect.left + (rect.width - dispW) / 2;
+                        offsetTop = rect.top + (rect.height - dispH) / 2;
+                    } else {
+                        scaleX = rect.width / vw;
+                        scaleY = rect.height / vh;
+                        offsetLeft = rect.left;
+                        offsetTop = rect.top;
+                    }
+
+                    let anyInside = false;
+                    for (const d of (detections || [])) {
+                        const box = d.box;
+                        const left = offsetLeft + box.x * scaleX;
+                        const top = offsetTop + box.y * scaleY;
+                        const width = box.width * scaleX;
+                        const height = box.height * scaleY;
+                        if (isBBoxInsideCircle({ left, top, width, height })) {
+                            anyInside = true;
+                            break;
+                        }
+                    }
+                    if (detections && detections.length > 0) {
+                        mark(!anyInside);
+                    } else {
+                        // Heuristic fallback if models loaded but no face detected
+                        const insideHeuristic = (() => {
+                            try {
+                                const circle = getCircle();
+                                // Map circle center from page to video pixels
+                                const cxV = (circle.cx - offsetLeft) / scaleX;
+                                const cyV = (circle.cy - offsetTop) / scaleY;
+                                const rV = (circle.r) / ((scaleX + scaleY) / 2);
+                                // Prepare canvas
+                                const canvas = this.canvas || document.createElement('canvas');
+                                canvas.width = vw;
+                                canvas.height = vh;
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(video, 0, 0, vw, vh);
+                                const side = Math.max(8, Math.floor(rV * 2));
+                                const sx = Math.max(0, Math.floor(cxV - side / 2));
+                                const sy = Math.max(0, Math.floor(cyV - side / 2));
+                                const sw = Math.min(side, vw - sx);
+                                const sh = Math.min(side, vh - sy);
+                                const img = ctx.getImageData(sx, sy, sw, sh);
+                                const data = img.data;
+                                let n = 0, sum = 0, sum2 = 0, skin = 0;
+                                const r2 = (side/2)*(side/2);
+                                for (let y = 0; y < sh; y++) {
+                                    for (let x = 0; x < sw; x++) {
+                                        const dx = x - sw/2;
+                                        const dy = y - sh/2;
+                                        if (dx*dx + dy*dy > r2) continue; // keep within circle
+                                        const idx = (y*sw + x) * 4;
+                                        const r = data[idx], g = data[idx+1], b = data[idx+2];
+                                        const maxc = Math.max(r,g,b), minc = Math.min(r,g,b);
+                                        const skinLike = (r > 95 && g > 40 && b > 20 && (maxc-minc) > 15 && Math.abs(r-g) > 15 && r > g && r > b);
+                                        if (skinLike) skin++;
+                                        const gray = 0.299*r + 0.587*g + 0.114*b;
+                                        sum += gray;
+                                        sum2 += gray*gray;
+                                        n++;
+                                    }
+                                }
+                                if (n < 50) return false;
+                                const mean = sum / n;
+                                const variance = Math.max(0, (sum2 / n) - (mean * mean));
+                                const skinRatio = skin / n;
+                                const skinOk = skinRatio >= (FrontendFaceConfig.MIN_SKIN_RATIO||0.02) && skinRatio <= (FrontendFaceConfig.MAX_SKIN_RATIO||0.8);
+                                const varOk = variance >= (FrontendFaceConfig.MIN_EDGE_VARIANCE||8);
+                                return skinOk && varOk;
+                            } catch (e) { return false; }
+                        })();
+                        mark(!insideHeuristic);
+                    }
+                } else {
+                    // No models available -> use heuristic fallback
+                    try {
+                        const rect = video.getBoundingClientRect();
+                        const vw = video.videoWidth || 0;
+                        const vh = video.videoHeight || 0;
+                        if (!vw || !vh) { mark(true); return; }
+                        const fit = getComputedStyle(video).objectFit || 'fill';
+                        let scaleX = 1, scaleY = 1, offsetLeft = rect.left, offsetTop = rect.top;
+                        if (fit === 'cover' || fit === 'contain') {
+                            const s = (fit === 'cover')
+                                ? Math.max(rect.width / vw, rect.height / vh)
+                                : Math.min(rect.width / vw, rect.height / vh);
+                            const dispW = vw * s;
+                            const dispH = vh * s;
+                            scaleX = scaleY = s;
+                            offsetLeft = rect.left + (rect.width - dispW) / 2;
+                            offsetTop = rect.top + (rect.height - dispH) / 2;
+                        } else {
+                            scaleX = rect.width / vw;
+                            scaleY = rect.height / vh;
+                            offsetLeft = rect.left;
+                            offsetTop = rect.top;
+                        }
+                        const circle = getCircle();
+                        const cxV = (circle.cx - offsetLeft) / scaleX;
+                        const cyV = (circle.cy - offsetTop) / scaleY;
+                        const rV = (circle.r) / ((scaleX + scaleY) / 2);
+                        const canvas = this.canvas || document.createElement('canvas');
+                        canvas.width = vw;
+                        canvas.height = vh;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(video, 0, 0, vw, vh);
+                        const side = Math.max(8, Math.floor(rV * 2));
+                        const sx = Math.max(0, Math.floor(cxV - side / 2));
+                        const sy = Math.max(0, Math.floor(cyV - side / 2));
+                        const sw = Math.min(side, vw - sx);
+                        const sh = Math.min(side, vh - sy);
+                        const img = ctx.getImageData(sx, sy, sw, sh);
+                        const data = img.data;
+                        let n = 0, sum = 0, sum2 = 0, skin = 0;
+                        const r2 = (side/2)*(side/2);
+                        for (let y = 0; y < sh; y++) {
+                            for (let x = 0; x < sw; x++) {
+                                const dx = x - sw/2;
+                                const dy = y - sh/2;
+                                if (dx*dx + dy*dy > r2) continue;
+                                const idx = (y*sw + x) * 4;
+                                const r = data[idx], g = data[idx+1], b = data[idx+2];
+                                const maxc = Math.max(r,g,b), minc = Math.min(r,g,b);
+                                const skinLike = (r > 95 && g > 40 && b > 20 && (maxc-minc) > 15 && Math.abs(r-g) > 15 && r > g && r > b);
+                                if (skinLike) skin++;
+                                const gray = 0.299*r + 0.587*g + 0.114*b;
+                                sum += gray;
+                                sum2 += gray*gray;
+                                n++;
+                            }
+                        }
+                        const mean = n ? sum / n : 0;
+                        const variance = n ? Math.max(0, (sum2 / n) - (mean * mean)) : 0;
+                        const skinRatio = n ? skin / n : 0;
+                        const skinOk = skinRatio >= (FrontendFaceConfig.MIN_SKIN_RATIO||0.02) && skinRatio <= (FrontendFaceConfig.MAX_SKIN_RATIO||0.8);
+                        const varOk = variance >= (FrontendFaceConfig.MIN_EDGE_VARIANCE||8);
+                        mark(!(skinOk && varOk));
+                    } catch (_) {
+                        mark(true);
+                    }
+                }
+            } catch (_) {
+                // On any error, mark as not found to encourage centering
+                mark(true);
+            }
+        };
+
+        this._monitorHandle = setInterval(loop, checkIntervalMs);
+    }
+
+    stopOverlayMonitor() {
+        if (this._monitorHandle) {
+            clearInterval(this._monitorHandle);
+            this._monitorHandle = null;
+        }
+        const overlay = document.querySelector('.camera-overlay');
+        if (overlay) {
+            overlay.classList.remove('error');
+            overlay.classList.remove('success');
         }
     }
 
